@@ -1,0 +1,12 @@
+<REAPER_PROJECT 0.1 "7.0/win64" 0 0
+  RECORD_PATH "Media" ""
+  <RECORD_CFG
+    ZXZhdxgAAQ==
+  >
+  SAMPLERATE 48000 0 0
+  <TRACK
+    NAME Guitar
+    REC 1 0 1 0 0 0 0 0
+    NCHAN 2
+  >
+>
