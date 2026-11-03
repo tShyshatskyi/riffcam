@@ -118,6 +118,8 @@ if it then
          reaper.GetMediaItemInfo_Value(it, "D_POSITION") .. "|" .. reaper.GetMediaItemInfo_Value(it, "D_LENGTH") ..
          "|" .. reaper.GetMediaItemTakeInfo_Value(tk, "D_STARTOFFS") .. "|" .. copy
   reaper.DeleteTrackMediaItem(g, it) -- the wav stays on disk; the live project stays clean
+  local b = backing() -- and refers to no song file at rest: a missing one makes REAPER ask about it on open
+  if b then clear(b) end
   reaper.UpdateArrange()
   reaper.Main_SaveProject(0, false)
 end
@@ -151,6 +153,12 @@ class OBSClient:
         if not status["result"]:
             raise RuntimeError(f"OBS {request}: {status.get('comment') or status['code']}")
         return m["d"].get("responseData", {})
+
+    def close(self):
+        try:
+            self.ws.close()  # OBS waits for open clients on exit (~40 s) if we just leave
+        except Exception:
+            pass
 
 
 def ws_config():
@@ -201,6 +209,10 @@ def obs_prepare(obs):
         if name not in have:
             obs("CreateInput", sceneName=scene, inputName=name, inputKind=kind, inputSettings={})
     obs("SetInputAudioTracks", inputName=GTR, inputAudioTracks={str(i): i == 1 for i in range(1, 7)})
+    try:  # a webcam with a built-in mic would leak into the guitar track
+        obs("SetInputAudioTracks", inputName=CAM, inputAudioTracks={str(i): False for i in range(1, 7)})
+    except RuntimeError:
+        pass  # camera without audio
     for name in obs("GetSpecialInputs").values():  # default desktop/mic sources would leak into the guitar track
         if name:
             obs("SetInputMute", inputName=name, inputMuted=True)
@@ -251,10 +263,31 @@ def running(exe):
     return exe.lower() in out.lower()
 
 
+def reaper_window():
+    return ctypes.windll.user32.FindWindowW("REAPERwnd", None)
+
+
 def reaper_lua(name, code):
+    """Run Lua inside the open REAPER. Only once its main window exists: before that, -nonewinst can't find
+    the running REAPER and starts a second, empty one instead."""
+    if not reaper_window():
+        return False
     path = os.path.join(TMP, f"{name}.lua")
     open(path, "w", encoding="utf-8").write(code)
     subprocess.Popen([REAPER, "-nonewinst", path])
+    return True
+
+
+def reaper_ready(secs=180):
+    """True once REAPER runs scripts: right after launch it is still loading plugins."""
+    out = os.path.join(TMP, "ping.ok")
+    deadline = time.time() + secs
+    while time.time() < deadline:
+        fresh(out)
+        if reaper_lua("ping", f'local f = io.open([[{out}]], "w") f:write("ok") f:close()\n') and wait_for(out, 3):
+            return True
+        time.sleep(1)
+    return False
 
 
 def wait_for(path, secs):
@@ -501,6 +534,7 @@ class App:
         self.root, self.obs, self.started, self.live = root, None, 0, True
         self.song, self.song_len, self.take = None, 0.0, None
         self.playing, self.vid, self.frame_busy, self.snip_n = None, None, False, 0
+        self.closing = False
         self.settings = load_settings()
         root.title(APP)
         root.resizable(False, False)
@@ -653,6 +687,10 @@ class App:
         if not self.obs:
             self.say("OBS isn't answering. Close OBS completely (also in the tray) and start RiffCam again.")
             return
+        self.say("Waiting for REAPER to load your amp... (close its license popup if it shows)")
+        if not reaper_ready():
+            self.say("REAPER isn't answering. Close any popup in REAPER (or restart it) and start RiffCam again.")
+            return
         self.configure_obs(ask=False)
         threading.Thread(target=self.preview, daemon=True).start()
 
@@ -737,12 +775,14 @@ class App:
     def preview(self):
         # OBS screenshots over websocket manage only ~4 fps, so read OBS Virtual Camera with ffmpeg instead (~25 fps)
         try:
-            obs = obs_connect()  # own connection: one per thread
-            if not obs("GetVirtualCamStatus")["outputActive"]:
+            obs = self.obs_preview = obs_connect()  # own connection: one per thread
+            if not self.closing and not obs("GetVirtualCamStatus")["outputActive"]:
                 obs("StartVirtualCam")
         except Exception:
             return
         time.sleep(1)
+        if self.closing:  # the window was closed while we connected
+            return obs.close()
         self.ffplay = subprocess.Popen([FFMPEG, "-loglevel", "quiet", "-f", "dshow", "-i", "video=OBS Virtual Camera",
                                         "-vf", f"scale={W}:{H}", "-r", "25", "-f", "rawvideo", "-pix_fmt", "rgb24",
                                         "pipe:1"], stdout=subprocess.PIPE, creationflags=NOWIN)
@@ -760,6 +800,7 @@ class App:
         self.frame_busy = False
 
     def close(self):
+        self.closing = True
         self.stop_play()
         try:
             if self.started:
@@ -774,6 +815,9 @@ class App:
             pass
         if getattr(self, "ffplay", None):
             self.ffplay.kill()
+        for cl in (self.obs, getattr(self, "obs_preview", None)):
+            if cl:
+                cl.close()
         close_obs()  # webcam light off
         self.root.destroy()
 
