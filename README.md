@@ -6,7 +6,7 @@
   <img src="https://img.shields.io/badge/LICENSE-MIT-ff1a3c?style=for-the-badge&labelColor=111111" alt="MIT">
 </p>
 
-<p align="center"><img src="docs/badges.png" alt="REAPER powered · OBS inside · best viewed on a CRT · no ads, no bloat · made in Ukraine"></p>
+<p align="center"><img src="docs/badges.png" alt="REAPER powered · FFmpeg inside · best viewed on a CRT · no ads, no bloat · made in Ukraine"></p>
 
 Recording a play-along video usually means: download the backing track, record the guitar in your DAW,
 film yourself separately, then line everything up in a video editor. **RiffCam does all of that for you.**
@@ -23,22 +23,22 @@ film yourself separately, then line everything up in a video editor. **RiffCam d
 
 ## How it works
 
-RiffCam drives two tools you may already have:
+RiffCam drives REAPER and films you itself:
 
 - **REAPER** is the amp and the recorder. It plays the song and records your *dry* guitar through ASIO,
   in perfect sync with the song (REAPER compensates its own latency). Your amp sim (Neural DSP, Line 6
   Helix Native, NAM, anything) sits on a track in REAPER.
-- **OBS Studio** films the webcam and *also* records the same dry guitar.
+- **FFmpeg** (built in) films the webcam, up to 1080p, and *also* records the same dry guitar from your
+  audio interface, both stamped by one clock.
 
 After a take, REAPER renders exactly what you heard (amp, song, faders, master FX), and RiffCam finds
-where the REAPER take sits inside the OBS recording by matching the two copies of your dry guitar.
+where the REAPER take sits inside the camera recording by matching the two copies of your dry guitar.
 That puts the video in sync with the sound to the millisecond: no clapping, no manual nudging.
 
 ## Requirements
 
 - Windows 10 or 11
 - [REAPER](https://www.reaper.fm) (the free evaluation works)
-- [OBS Studio](https://obsproject.com) 30 or newer
 - An audio interface with an ASIO driver, a webcam, and an amp plugin for REAPER
 
 ## Install
@@ -53,8 +53,7 @@ There's nothing else to install: FFmpeg, yt-dlp and everything else ship inside 
 <img src="docs/setup.png" width="360" align="right" alt="Setup">
 
 1. **SETUP** opens: pick your **camera** and the **input your guitar is plugged into**
-   (for example `Analogue 1 + 2 (Focusrite USB Audio)`). RiffCam creates its own OBS profile and scene
-   for this; your other OBS settings stay as they are.
+   (for example `Analogue 1 + 2 (Focusrite USB Audio)`).
 2. **In REAPER**, once:
    - *Options > Preferences > Audio > Device*: choose your interface's **ASIO** driver.
    - On the **Guitar** track (it's armed for recording), choose your guitar's input and add your amp
@@ -69,6 +68,8 @@ Change the camera or input later with **SETUP**.
 - **Song levels:** the song plays on REAPER's **Backing** track. Set its fader and your guitar track's
   fader in REAPER; the video gets exactly that mix.
 - **Start a bit early.** Set *START* a few seconds before the part you want, and trim later.
+- **Light up the room.** In dim light webcams stretch the exposure and drop to 15 to 20 fps; with
+  decent light you get the full 30.
 - **Picture lags the sound?** Webcams are often a little late. Raise *Video delay* in **SETUP**
   (try 50 to 150 ms).
 - **Files:** finished videos go to `Videos\RiffCam`. The raw camera recording and your dry guitar stay in
@@ -78,7 +79,8 @@ Change the camera or input later with **SETUP**.
 
 - **"REAPER didn't start recording"**: REAPER's evaluation reminder (or another dialog) is open in
   REAPER. Close it and hit REC again. Also check that a track is armed.
-- **OBS shows an "update available" window** at start: choose *Remind me later* or update OBS.
+- **"Couldn't open the camera"**: another app (Zoom, Teams, OBS, the Camera app) is using it. Close
+  that app; the webcam can only be used by one program at a time.
 - **A YouTube link stops working**: YouTube changes often. Grab the latest RiffCam release (it ships a
   newer yt-dlp), or use **OPEN FILE**.
 - **Settings and the REAPER project** live in `%APPDATA%\RiffCam`. Delete `settings.json` to run setup

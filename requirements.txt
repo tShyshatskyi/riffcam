@@ -1,5 +1,4 @@
 numpy
 imageio-ffmpeg
-websocket-client
 yt-dlp[default,deno]
 pillow

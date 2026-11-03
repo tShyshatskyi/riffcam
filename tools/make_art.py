@@ -86,7 +86,7 @@ def banner(ico):
 
 def badges():
     row = [("REC", "REAPER\npowered", ((30, 30, 30), skin.HOT, skin.ACID)),
-           ("OBS", "inside", ((0, 40, 0), skin.ACID, (255, 255, 255))),
+           ("AV", "FFmpeg\ninside", ((0, 40, 0), skin.ACID, (255, 255, 255))),
            ("CRT", "best viewed\non a", ((60, 0, 60), skin.PINK, (255, 255, 255))),
            ("$0", "no ads\nno bloat", ((40, 40, 0), (255, 230, 0), (255, 255, 255))),
            ("UA", "made in\nUkraine", ((0, 60, 140), (255, 215, 0), (255, 255, 255)))]

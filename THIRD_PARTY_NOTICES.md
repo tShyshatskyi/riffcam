@@ -11,7 +11,6 @@ programs and libraries below, each under its own license.
 | yt-dlp-ejs | Unlicense / MIT / ISC | https://github.com/yt-dlp/ejs |
 | imageio-ffmpeg | BSD-2-Clause | https://github.com/imageio/imageio-ffmpeg |
 | NumPy | BSD-3-Clause and others | https://github.com/numpy/numpy |
-| websocket-client | Apache-2.0 | https://github.com/websocket-client/websocket-client |
 | Pillow | MIT-CMU (HPND) | https://github.com/python-pillow/Pillow |
 | Fonts: Metal Mania, Russo One, VT323 | SIL Open Font License 1.1 (texts in `assets/fonts`) | https://github.com/google/fonts |
 | Python and Tcl/Tk (via PyInstaller) | PSF-2.0, Tcl/Tk license | https://www.python.org, https://www.tcl.tk |
@@ -19,5 +18,4 @@ programs and libraries below, each under its own license.
 FFmpeg and Deno are separate programs that RiffCam starts as child processes; they are not linked
 into RiffCam's code. The FFmpeg source code for the bundled build is available from the links above.
 
-RiffCam talks to REAPER (https://www.reaper.fm) and OBS Studio (https://obsproject.com), which you
-install yourself and which keep their own licenses.
+RiffCam drives REAPER (https://www.reaper.fm), which you install yourself and which keeps its own license.

@@ -1,18 +1,17 @@
 """RiffCam: film yourself playing along with a song, in one window.
 
 REAPER is the amp and the recorder: it plays the song from the point you pick and records your dry guitar in
-sync with it (REAPER compensates its own latency). OBS films the webcam and also records the same dry guitar;
-matching the two guitar recordings lines the video up with REAPER. After a take you keep or bin it, trim it,
+sync with it (REAPER compensates its own latency). ffmpeg films the webcam and also records the same dry
+guitar from the audio interface; matching the two guitar recordings lines the video up with REAPER. After a take you keep or bin it, trim it,
 and export -> Videos\\RiffCam\\*.mp4.
 
 python riffcam.py --test   checks the alignment math and renders the template project through REAPER.
 """
-import base64, ctypes, functools, hashlib, json, os, re, secrets, shutil, subprocess, sys, threading, time, wave, winreg, winsound
+import ctypes, functools, json, os, re, shutil, subprocess, sys, threading, time, wave, winreg, winsound
 import tkinter as tk
 from tkinter import filedialog, ttk
 import numpy as np
 import imageio_ffmpeg
-import websocket
 import yt_dlp
 from PIL import ImageTk
 import ctypes.wintypes
@@ -45,16 +44,14 @@ SONGS, TMP = os.path.join(DATA, "songs"), os.path.join(DATA, "tmp")
 SETTINGS = os.path.join(DATA, "settings.json")
 OUT = os.path.join(os.environ["USERPROFILE"], "Videos", APP)
 RAW = os.path.join(OUT, "raw")
-WS_CFG = os.path.join(os.environ["APPDATA"], "obs-studio", "plugin_config", "obs-websocket", "config.json")
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
 DENO = os.path.join(BUNDLE, "deno.exe")  # JS runtime yt-dlp needs for YouTube; on PATH when run from source
 NOWIN = subprocess.CREATE_NO_WINDOW
-CAM, GTR = "RiffCam Camera", "RiffCam Guitar"  # OBS source names
 SR = 48000
 
 
 def installed(key, exe, default):
-    """Program path from the registry (REAPER's and OBS's installers both write it), else the default location."""
+    """Program path from the registry (REAPER's installer writes it), else the default location."""
     for root in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
         try:
             with winreg.OpenKey(root, rf"SOFTWARE\{key}") as k:
@@ -67,7 +64,6 @@ def installed(key, exe, default):
 
 
 REAPER = installed("REAPER", "reaper.exe", r"C:\Program Files\REAPER (x64)\reaper.exe")
-OBS = installed("OBS Studio", r"bin\64bit\obs64.exe", r"C:\Program Files\obs-studio\bin\64bit\obs64.exe")
 
 # Lua run inside the open REAPER (reaper.exe -nonewinst script.lua). "Armed" track = the live amp.
 LUA_HEAD = (
@@ -127,124 +123,44 @@ put([[{out}]], info)
 """
 
 
-class OBSClient:
-    """Minimal obs-websocket v5 client: requests only, no events."""
-
-    def __init__(self, port, password):
-        self.ws = websocket.create_connection(f"ws://localhost:{port}", timeout=10)
-        hello = json.loads(self.ws.recv())["d"]
-        ident = {"rpcVersion": 1, "eventSubscriptions": 0}
-        if "authentication" in hello:
-            a = hello["authentication"]
-            secret = base64.b64encode(hashlib.sha256((password + a["salt"]).encode()).digest()).decode()
-            ident["authentication"] = base64.b64encode(hashlib.sha256((secret + a["challenge"]).encode()).digest()).decode()
-        self.ws.send(json.dumps({"op": 1, "d": ident}))
-        if json.loads(self.ws.recv())["op"] != 2:
-            raise ConnectionError("OBS refused the connection")
-        self.n = 0
-
-    def __call__(self, request, **data):
-        self.n += 1
-        rid = str(self.n)
-        self.ws.send(json.dumps({"op": 6, "d": {"requestType": request, "requestId": rid, "requestData": data}}))
-        while (m := json.loads(self.ws.recv()))["op"] != 7 or m["d"]["requestId"] != rid:
-            pass
-        status = m["d"]["requestStatus"]
-        if not status["result"]:
-            raise RuntimeError(f"OBS {request}: {status.get('comment') or status['code']}")
-        return m["d"].get("responseData", {})
-
-    def close(self):
-        try:
-            self.ws.close()  # OBS waits for open clients on exit (~40 s) if we just leave
-        except Exception:
-            pass
+def dshow_devices():
+    """Cameras and audio inputs DirectShow can see: ([names], [names])."""
+    out = subprocess.run([FFMPEG, "-hide_banner", "-f", "dshow", "-list_devices", "true", "-i", "dummy"],
+                         capture_output=True, text=True, errors="replace", creationflags=NOWIN).stderr
+    found = re.findall(r'"([^"]+)" \((video|audio)\)', out)
+    return [n for n, kind in found if kind == "video"], [n for n, kind in found if kind == "audio"]
 
 
-def ws_config():
-    """Turn on OBS's built-in websocket server. OBS must be closed: it rewrites this file on exit."""
-    try:
-        cfg = json.load(open(WS_CFG, encoding="utf-8"))
-    except (OSError, ValueError):
-        cfg = {"server_port": 4455, "auth_required": True, "server_password": secrets.token_urlsafe(12),
-               "alerts_enabled": False, "first_load": False}
-    cfg["server_enabled"] = True
-    os.makedirs(os.path.dirname(WS_CFG), exist_ok=True)
-    json.dump(cfg, open(WS_CFG, "w", encoding="utf-8"), indent=2)
-    return cfg
+def best_mode(listing):
+    """dshow input options for the best mode up to 1080p at 25+ fps in an ffmpeg -list_options listing
+    (bigger first, raw over MJPEG); [] keeps the camera's default."""
+    modes = []
+    for kind, val, w, h, fps in re.findall(r"(pixel_format|vcodec)=(\S+)\s+min s=\S+ fps=\S+ max s=(\d+)x(\d+) fps=([\d.]+)", listing):
+        if int(h) <= 1080 and float(fps) >= 25:
+            modes.append((int(w) * int(h), val != "mjpeg", kind, val, w, h, min(float(fps), 30)))
+    if not modes:
+        return []
+    *_, kind, val, w, h, fps = max(modes)
+    return ["-video_size", f"{w}x{h}", "-framerate", f"{fps:g}", f"-{kind}", val]
 
 
-def obs_connect():
-    cfg = json.load(open(WS_CFG, encoding="utf-8"))
-    pw = cfg.get("server_password", "") if cfg.get("auth_required") else ""
-    for _ in range(60):
-        try:
-            obs = OBSClient(cfg.get("server_port", 4455), pw)
-            obs("GetProfileList")  # the socket opens before OBS can take requests ("not ready", code 207)
-            return obs
-        except Exception:
-            time.sleep(1)
+@functools.cache
+def camera_mode(name):
+    return best_mode(subprocess.run([FFMPEG, "-hide_banner", "-f", "dshow", "-list_options", "true", "-i", f"video={name}"],
+                                    capture_output=True, text=True, errors="replace", creationflags=NOWIN).stderr)
 
 
-def obs_prepare(obs):
-    """RiffCam profile + scene collection with the camera and the guitar input (created once, reused after).
-    Returns the cameras and audio inputs OBS can see, as [(name, id)]."""
-    p = obs("GetProfileList")
-    if APP not in p["profiles"]:
-        obs("CreateProfile", profileName=APP)
-    elif p["currentProfileName"] != APP:
-        obs("SetCurrentProfile", profileName=APP)
-    for cat, name, val in (("Output", "Mode", "Simple"), ("SimpleOutput", "FilePath", RAW),
-                           ("SimpleOutput", "RecFormat2", "mkv"), ("SimpleOutput", "RecQuality", "Small"),
-                           ("SimpleOutput", "RecTracks", "1")):
-        obs("SetProfileParameter", parameterCategory=cat, parameterName=name, parameterValue=val)
-    c = obs("GetSceneCollectionList")
-    if APP not in c["sceneCollections"]:
-        obs("CreateSceneCollection", sceneCollectionName=APP)
-    elif c["currentSceneCollectionName"] != APP:
-        obs("SetCurrentSceneCollection", sceneCollectionName=APP)
-    scene = obs("GetCurrentProgramScene")["currentProgramSceneName"]
-    have = {i["inputName"] for i in obs("GetInputList")["inputs"]}
-    for name, kind in ((CAM, "dshow_input"), (GTR, "wasapi_input_capture")):
-        if name not in have:
-            obs("CreateInput", sceneName=scene, inputName=name, inputKind=kind, inputSettings={})
-    obs("SetInputAudioTracks", inputName=GTR, inputAudioTracks={str(i): i == 1 for i in range(1, 7)})
-    try:  # a webcam with a built-in mic would leak into the guitar track
-        obs("SetInputAudioTracks", inputName=CAM, inputAudioTracks={str(i): False for i in range(1, 7)})
-    except RuntimeError:
-        pass  # camera without audio
-    for name in obs("GetSpecialInputs").values():  # default desktop/mic sources would leak into the guitar track
-        if name:
-            obs("SetInputMute", inputName=name, inputMuted=True)
-    v = obs("GetVideoSettings")
-    item = obs("GetSceneItemId", sceneName=scene, sourceName=CAM)["sceneItemId"]
-    obs("SetSceneItemTransform", sceneName=scene, sceneItemId=item, sceneItemTransform={
-        "positionX": 0, "positionY": 0, "alignment": 5, "boundsType": "OBS_BOUNDS_SCALE_INNER", "boundsAlignment": 0,
-        "boundsWidth": v["baseWidth"], "boundsHeight": v["baseHeight"]})
-
-    def items(src, prop):
-        found = obs("GetInputPropertiesListPropertyItems", inputName=src, propertyName=prop)["propertyItems"]
-        return [(i["itemName"], i["itemValue"]) for i in found if i["itemValue"]]
-    return items(CAM, "video_device_id"), items(GTR, "device_id")
-
-
-def obs_apply(obs, s):
-    obs("SetInputSettings", inputName=CAM, inputSettings={"video_device_id": s["camera"]})
-    obs("SetInputSettings", inputName=GTR, inputSettings={"device_id": s["audio"]})
-
-
-def close_obs():
-    """Polite close of OBS's main window only. A forced kill makes OBS show "crash detected" next start,
-    and taskkill also closes its hidden docks, each of which then pops a "close this dock?" dialog."""
-    u, buf = ctypes.windll.user32, ctypes.create_unicode_buffer(256)
-
-    @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
-    def each(hwnd, _):
-        u.GetWindowTextW(hwnd, buf, 256)
-        if re.match(r"OBS \d+\.\d+.* - ", buf.value):  # "OBS 32.2.2 - Profile: RiffCam - Scenes: RiffCam"
-            u.PostMessageW(hwnd, 0x10, 0, 0)  # WM_CLOSE
-        return True
-    u.EnumWindows(each, 0)
+def camera_cmd(cam, mic, out=None):
+    """ffmpeg on the camera, always feeding the preview pipe; with `out` it also records the camera plus the guitar
+    input into that file. One DirectShow graph stamps both, so picture and guitar share one clock."""
+    cmd = [FFMPEG, "-hide_banner", "-nostats", "-loglevel", "error", "-f", "dshow", "-rtbufsize", "512M",
+           "-audio_buffer_size", "50", *camera_mode(cam), "-i", f"video={cam}" + (f":audio={mic}" if out else "")]
+    preview = ["-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"]
+    if not out:
+        return cmd + ["-vf", f"scale={W}:{H},fps=25", *preview]
+    return cmd + ["-filter_complex", f"[0:v]split[rec][pv];[pv]scale={W}:{H},fps=25[pvo]",
+                  "-map", "[rec]", "-map", "0:a", "-c:v", *video_encoder(realtime=True), "-c:a", "pcm_s16le", "-y", out,
+                  "-map", "[pvo]", *preview]
 
 
 def load_settings():
@@ -267,25 +183,65 @@ def reaper_window():
     return ctypes.windll.user32.FindWindowW("REAPERwnd", None)
 
 
-def reaper_lua(name, code):
-    """Run Lua inside the open REAPER. Only once its main window exists: before that, -nonewinst can't find
-    the running REAPER and starts a second, empty one instead."""
-    if not reaper_window():
-        return False
+# A small script that stays running inside REAPER and runs whatever Lua appears in tmp\cmd.lua. Commands then
+# reach REAPER without starting reaper.exe each time, which would pull REAPER's window to the front.
+# The newest bridge owns bridge.id; an older one (from a previous RiffCam run) sees that and quits.
+LUA_BRIDGE = """
+local dir, me = [[{tmp}]], "{id}"
+local f = io.open(dir .. "\\\\bridge.id", "w") f:write(me) f:close()
+local cmd = dir .. "\\\\cmd.lua"
+local function tick()
+  local idf = io.open(dir .. "\\\\bridge.id")
+  local owner = idf and idf:read("a")
+  if idf then idf:close() end
+  if owner ~= me then return end
+  local c = io.open(cmd)
+  if c then c:close() pcall(dofile, cmd) os.remove(cmd) end
+  reaper.defer(tick)
+end
+tick()
+"""
+
+
+def reaper_lua(code):
+    """Hand Lua to the bridge running inside REAPER (no window switching)."""
+    path = os.path.join(TMP, "cmd.lua")
+    for _ in range(30):  # the previous command hasn't been picked up yet
+        if not os.path.exists(path):
+            break
+        time.sleep(0.1)
+    open(path + ".tmp", "w", encoding="utf-8").write(code)
+    os.replace(path + ".tmp", path)
+
+
+def reaper_run(name, code):
+    """Start a script in the open REAPER via reaper.exe -nonewinst. This brings REAPER to the front, so it's only
+    for loading the bridge and for the AMP button. Only once REAPER's main window exists: before that,
+    -nonewinst can't find the running REAPER and starts a second, empty one instead."""
     path = os.path.join(TMP, f"{name}.lua")
     open(path, "w", encoding="utf-8").write(code)
     subprocess.Popen([REAPER, "-nonewinst", path])
-    return True
+
+
+def start_bridge():
+    bid = f"{os.getpid()}_{time.time_ns()}"  # a new script name each time: REAPER asks before re-running a live script
+    reaper_run(f"bridge_{bid}", LUA_BRIDGE.format(tmp=TMP, id=bid))
 
 
 def reaper_ready(secs=180):
-    """True once REAPER runs scripts: right after launch it is still loading plugins."""
+    """True once REAPER answers through the bridge, loading it if needed. Right after launch REAPER is still
+    loading plugins and runs nothing."""
     out = os.path.join(TMP, "ping.ok")
     deadline = time.time() + secs
     while time.time() < deadline:
-        fresh(out)
-        if reaper_lua("ping", f'local f = io.open([[{out}]], "w") f:write("ok") f:close()\n') and wait_for(out, 3):
-            return True
+        if reaper_window():
+            fresh(out)
+            reaper_lua(f'local f = io.open([[{out}]], "w") f:write("ok") f:close()\n')
+            if wait_for(out, 1.5):
+                return True
+            start_bridge()  # it picks up the waiting ping
+            if wait_for(out, 4):
+                return True
         time.sleep(1)
     return False
 
@@ -359,10 +315,10 @@ def mono8k(path):
     return np.frombuffer(b, np.float32)
 
 
-def find_offset(obs, take, rate=8000):
-    """Seconds into `obs` where `take` starts (both hold the same dry guitar) and how clear the match is."""
-    n = 1 << int(np.ceil(np.log2(len(obs) + len(take))))
-    c = np.fft.irfft(np.fft.rfft(obs, n) * np.conj(np.fft.rfft(take, n)), n)[:len(obs)]
+def find_offset(video, take, rate=8000):
+    """Seconds into `video` where `take` starts (both hold the same dry guitar) and how clear the match is."""
+    n = 1 << int(np.ceil(np.log2(len(video) + len(take))))
+    c = np.fft.irfft(np.fft.rfft(video, n) * np.conj(np.fft.rfft(take, n)), n)[:len(video)]
     i = int(np.argmax(c))
     return i / rate, float(c[i] / (np.std(c) + 1e-12))
 
@@ -385,7 +341,8 @@ def render(project, start, end, mix):
            f"  RENDER_STEMS 0\n  RENDER_ADDTOPROJ 0\n  <RENDER_CFG\n    ZXZhdxgAAQ==\n  >\n{rest}")
     open(project, "w", encoding="utf-8").write(rpp)
     fresh(mix)
-    subprocess.run([REAPER, "-newinst", "-nosplash", "-renderproject", project], timeout=900)
+    hidden = subprocess.STARTUPINFO(dwFlags=subprocess.STARTF_USESHOWWINDOW, wShowWindow=7)  # SW_SHOWMINNOACTIVE: don't take focus
+    subprocess.run([REAPER, "-newinst", "-nosplash", "-renderproject", project], startupinfo=hidden, timeout=900)
     if not os.path.exists(mix):
         raise RuntimeError("REAPER couldn't render the sound")
 
@@ -399,19 +356,20 @@ def peaks(path, cols):
 
 
 @functools.cache
-def video_encoder():
-    """First hardware H.264 encoder that works on this PC (NVIDIA, AMD, Intel), else x264 on the CPU."""
+def video_encoder(realtime=False):
+    """First hardware H.264 encoder that works on this PC (NVIDIA, AMD, Intel), else x264 on the CPU.
+    `realtime`: settings for live camera capture (more bitrate, the fastest x264 preset)."""
     for enc in ("h264_nvenc", "h264_amf", "h264_qsv"):
         test = subprocess.run([FFMPEG, "-loglevel", "quiet", "-f", "lavfi", "-i", "color=size=640x360:duration=0.2",
                                "-c:v", enc, "-f", "null", "-"], creationflags=NOWIN)
         if test.returncode == 0:
-            return [enc, "-b:v", "8M"]
-    return ["libx264", "-preset", "veryfast", "-crf", "20"]
+            return [enc, "-b:v", "12M" if realtime else "8M"]
+    return ["libx264", "-preset", "ultrafast" if realtime else "veryfast", "-crf", "18" if realtime else "20"]
 
 
 def wait_file_done(path):
     size = -1
-    while size != os.path.getsize(path):  # OBS may still be finalizing the file
+    while size != os.path.getsize(path):  # ffmpeg may still be finalizing the file
         size = os.path.getsize(path)
         time.sleep(1)
 
@@ -531,10 +489,10 @@ class Slider:
 
 class App:
     def __init__(self, root):
-        self.root, self.obs, self.started, self.live = root, None, 0, True
+        self.root, self.started, self.live = root, 0, True
         self.song, self.song_len, self.take = None, 0.0, None
         self.playing, self.vid, self.frame_busy, self.snip_n = None, None, False, 0
-        self.closing = False
+        self.closing, self.cam = False, None
         self.settings = load_settings()
         root.title(APP)
         root.resizable(False, False)
@@ -612,7 +570,7 @@ class App:
 
         self.msg = c.create_text(k(LCD_BOX[0] + 14), k(LCD_BOX[1] + LCD_BOX[3]) // 2, text="", font=LCD(16),
                                  fill=skin.ACID_HEX, anchor="w", width=k(LCD_BOX[2] - LCD_BOX[0] - 26))
-        self.say("Booting REAPER + OBS...")
+        self.say("Booting REAPER...")
         self.mode("busy")
         threading.Thread(target=self.connect, daemon=True).start()
 
@@ -663,52 +621,35 @@ class App:
         self.root.after(4500, lambda: self.c.itemconfig(self.toast, state="hidden"))
 
     def connect(self):
-        missing = [n for n, p in (("REAPER (reaper.fm)", REAPER), ("OBS Studio (obsproject.com)", OBS)) if not p]
-        if missing:
-            self.say("RiffCam needs " + " and ".join(missing) + ". Install it, then start RiffCam again.")
+        if not REAPER:
+            self.say("RiffCam needs REAPER (reaper.fm). Install it, then start RiffCam again.")
             return
         if not os.path.exists(AMP):
             shutil.copy(os.path.join(BUNDLE, "template.rpp"), AMP)
-        if running("obs64.exe"):  # an OBS left running across sleep loses the webcam: always start a fresh one
-            close_obs()
-            for _ in range(40):
-                if not running("obs64.exe"):
-                    break
-                time.sleep(0.5)
-            else:
-                self.say("Couldn't close the running OBS. Close it yourself (also in the tray) and start RiffCam again.")
-                return
         if not running("reaper.exe"):
             subprocess.Popen([REAPER, AMP])
-        ws_config()
-        subprocess.Popen([OBS, "--collection", APP, "--profile", APP, "--minimize-to-tray", "--disable-shutdown-check"],
-                         cwd=os.path.dirname(OBS))
-        self.obs = obs_connect()
-        if not self.obs:
-            self.say("OBS isn't answering. Close OBS completely (also in the tray) and start RiffCam again.")
-            return
         self.say("Waiting for REAPER to load your amp... (close its license popup if it shows)")
         if not reaper_ready():
             self.say("REAPER isn't answering. Close any popup in REAPER (or restart it) and start RiffCam again.")
             return
-        self.configure_obs(ask=False)
-        threading.Thread(target=self.preview, daemon=True).start()
+        self.ui(self.to_front)  # REAPER just opened or took the bridge script: come back on top
+        self.configure(ask=False)
 
-    def configure_obs(self, ask):
-        """Make sure OBS has our profile/scene; ask for camera + guitar input when unknown (or when `ask`)."""
-        try:
-            cams, mics = obs_prepare(self.obs)
-            s = self.settings
-            if ask or s.get("camera") not in {v for _, v in cams} or s.get("audio") not in {v for _, v in mics}:
-                done = threading.Event()
-                self.ui(lambda: self.setup_dialog(cams, mics, done))
-                done.wait()
-            obs_apply(self.obs, self.settings)
-        except Exception as e:
-            self.say(f"OBS setup failed: {e}")
+    def configure(self, ask):
+        """Pick camera + guitar input (asked when unknown, or when `ask`), then open the camera."""
+        cams, mics = dshow_devices()
+        if not cams or not mics:
+            self.say("No camera or no audio input found. Plug them in and start RiffCam again.")
             return
-        self.say("Ready to shred. Paste a song link or open a file, set the start, hit REC. "
-                 "(Close REAPER's license popup if it shows.)")
+        s = self.settings
+        if ask or s.get("camera") not in cams or s.get("audio") not in mics:
+            done = threading.Event()
+            self.ui(lambda: self.setup_dialog([(n, n) for n in cams], [(n, n) for n in mics], done))
+            done.wait()
+        if self.start_camera():
+            self.say("Ready to shred. Paste a song link or open a file, set the start, hit REC.")
+        else:
+            self.say("Couldn't open the camera (busy in another app?). Close that app or pick another camera in SETUP.")
         self.ui(lambda: self.mode("idle"))
 
     def setup_dialog(self, cams, mics, done):
@@ -736,7 +677,8 @@ class App:
             tk.Label(d, text=label, **lbl).pack(fill="x", pady=(10, 3))
             box = ttk.Combobox(d, values=[n for n, _ in options], state="readonly", width=52, style="Riff.TCombobox", font=LCD(16))
             ids = [v for _, v in options]
-            box.current(ids.index(current) if current in ids else 0)
+            guess = next((i for i, v in enumerate(ids) if not re.search(r"\bIR\b|Microphone Array|Stereo Mix", v)), 0)
+            box.current(ids.index(current) if current in ids else guess)  # not the IR camera / laptop mic
             box.pack(fill="x")
             return lambda: ids[box.current()]
         cam = pick("CAMERA", cams, s.get("camera"))
@@ -768,30 +710,50 @@ class App:
         d.protocol("WM_DELETE_WINDOW", save)
         d.grab_set()
 
+    def to_front(self):
+        self.root.deiconify()
+        self.root.attributes("-topmost", True)  # raises us even when Windows won't hand over focus
+        self.root.after(300, lambda: self.root.attributes("-topmost", False))
+        self.root.focus_force()
+
     def reconfigure(self):
         self.mode("busy")
-        threading.Thread(target=self.configure_obs, args=(True,), daemon=True).start()
+        threading.Thread(target=self.configure, args=(True,), daemon=True).start()
 
-    def preview(self):
-        # OBS screenshots over websocket manage only ~4 fps, so read OBS Virtual Camera with ffmpeg instead (~25 fps)
-        try:
-            obs = self.obs_preview = obs_connect()  # own connection: one per thread
-            if not self.closing and not obs("GetVirtualCamStatus")["outputActive"]:
-                obs("StartVirtualCam")
-        except Exception:
-            return
-        time.sleep(1)
-        if self.closing:  # the window was closed while we connected
-            return obs.close()
-        self.ffplay = subprocess.Popen([FFMPEG, "-loglevel", "quiet", "-f", "dshow", "-i", "video=OBS Virtual Camera",
-                                        "-vf", f"scale={W}:{H}", "-r", "25", "-f", "rawvideo", "-pix_fmt", "rgb24",
-                                        "pipe:1"], stdout=subprocess.PIPE, creationflags=NOWIN)
-        size, head = W * H * 3, f"P6 {W} {H} 255\n".encode()
-        while len(buf := self.ffplay.stdout.read(size)) == size:
-            if self.live and not self.frame_busy:  # drop frames instead of piling them up if Tk is behind
-                self.frame_busy = True
-                self.ui(lambda d=head + buf: self.show_frame(d))
-        self.ui(lambda: self.c.itemconfig(self.view, image=self.blank))
+    def start_camera(self, out=None):
+        """(Re)open the camera: preview only, or preview + recording to `out`. True once frames arrive."""
+        self.stop_camera()
+        s = self.settings
+        proc = self.cam = subprocess.Popen(camera_cmd(s["camera"], s["audio"], out), stdin=subprocess.PIPE,
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=NOWIN)
+        first = threading.Event()
+
+        def feed():
+            size, head = W * H * 3, f"P6 {W} {H} 255\n".encode()
+            while len(buf := proc.stdout.read(size)) == size:
+                first.set()
+                if self.live and not self.frame_busy:  # drop frames instead of piling them up if Tk is behind
+                    self.frame_busy = True
+                    self.ui(lambda d=head + buf: self.show_frame(d))
+            first.set()
+            if self.cam is proc and not self.closing:  # it died on its own
+                err = proc.stderr.read().decode(errors="replace").strip().splitlines()
+                self.say("Camera stopped: " + (err[-1] if err else "no picture") + ". Check SETUP.")
+                self.ui(lambda: self.c.itemconfig(self.view, image=self.blank))
+        threading.Thread(target=feed, daemon=True).start()
+        first.wait(20)
+        return proc.poll() is None
+
+    def stop_camera(self):
+        """Stop ffmpeg the polite way ('q'), so a recording gets a proper ending."""
+        proc, self.cam = self.cam, None
+        if proc and proc.poll() is None:
+            try:
+                proc.stdin.write(b"q")
+                proc.stdin.flush()
+                proc.wait(15)
+            except (OSError, subprocess.TimeoutExpired):
+                proc.kill()
 
     def show_frame(self, data, still=False):
         if self.live or still:
@@ -802,23 +764,9 @@ class App:
     def close(self):
         self.closing = True
         self.stop_play()
-        try:
-            if self.started:
-                reaper_lua("stop", LUA_STOP.format(out=os.path.join(TMP, "take.txt")))
-                self.obs("StopRecord")  # the take stays in raw\
-            self.obs("StopVirtualCam")
-            for _ in range(25):  # with an output still active OBS asks "exit anyway?" and stays open
-                if not (self.obs("GetVirtualCamStatus")["outputActive"] or self.obs("GetRecordStatus")["outputActive"]):
-                    break
-                time.sleep(0.2)
-        except Exception:
-            pass
-        if getattr(self, "ffplay", None):
-            self.ffplay.kill()
-        for cl in (self.obs, getattr(self, "obs_preview", None)):
-            if cl:
-                cl.close()
-        close_obs()  # webcam light off
+        if self.started:
+            reaper_lua(LUA_STOP.format(out=os.path.join(TMP, "take.txt")))  # the take stays in raw\
+        self.stop_camera()  # webcam light off
         self.root.destroy()
 
     # ---------- song ----------
@@ -865,7 +813,7 @@ class App:
 
     def show_tone(self):
         if running("reaper.exe"):
-            reaper_lua("show", LUA_SHOW)
+            reaper_run("show", LUA_SHOW)  # this one should bring REAPER up: you want to see the amp
         else:
             subprocess.Popen([REAPER, AMP])
 
@@ -883,19 +831,27 @@ class App:
             threading.Thread(target=self.stop_take, daemon=True).start()
 
     def start_take(self, song, start):
+        if not reaper_ready(20):  # REAPER restarted since? reload the bridge
+            self.say("REAPER isn't answering. Close any popup in REAPER and try again.")
+            self.ui(lambda: self.mode("idle"))
+            return
         ok = fresh(os.path.join(TMP, "rec.ok"))
-        self.obs("StartRecord")  # OBS first: the video must cover the whole REAPER take
-        t_obs = time.time()
-        time.sleep(0.3)
-        reaper_lua("record", LUA_RECORD.format(song=song or "", start=start, ok=ok))
+        raw = os.path.join(RAW, time.strftime("%Y-%m-%d %H-%M-%S") + ".mkv")
+        if not self.start_camera(raw):  # camera first: the video must cover the whole REAPER take
+            self.say("Couldn't start recording the camera and the guitar input. Check SETUP.")
+            self.start_camera()
+            self.ui(lambda: self.mode("idle"))
+            return
+        t_cam = time.time()
+        reaper_lua(LUA_RECORD.format(song=song or "", start=start, ok=ok))
         if not wait_for(ok, 8):
-            raw = self.obs("StopRecord")["outputPath"]
-            threading.Thread(target=lambda: (wait_file_done(raw), to_recycle_bin(raw)), daemon=True).start()
+            self.start_camera()  # back to preview only; the empty recording goes away
+            to_recycle_bin(raw)
             self.say("REAPER didn't start recording. Close any popup in REAPER (license etc.), "
                      "check a track is armed, and try again.")
             self.ui(lambda: self.mode("idle"))
             return
-        self.take = {"song": song, "start": start, "guess": time.time() - t_obs}  # rough offset if matching fails
+        self.take = {"song": song, "start": start, "raw": raw, "guess": time.time() - t_cam}  # rough offset if matching fails
         self.started = time.time()
         self.say("Recording. Give it everything.")
 
@@ -917,9 +873,9 @@ class App:
     def stop_take(self):
         self.started = 0
         info = fresh(os.path.join(TMP, "take.txt"))
-        reaper_lua("stop", LUA_STOP.format(out=info))
+        reaper_lua(LUA_STOP.format(out=info))
         got = wait_for(info, 15)
-        self.take["raw"] = self.obs("StopRecord")["outputPath"]  # after REAPER, so the video covers the whole take
+        self.start_camera()  # ends the recording (after REAPER, so the video covers the whole take), back to preview
         self.ui(lambda: self.rec.skin(self.rec_render))
         if got:
             fn, pos, length, offs, proj = open(info, encoding="utf-8", errors="replace").read().split("|")
@@ -961,16 +917,17 @@ class App:
             wait_file_done(t["raw"])
             t["mix"] = os.path.join(TMP, "mix.wav")
             render(t["proj"], t["pos"], t["pos"] + t["len"], t["mix"])  # mix time 0 = take start
+            self.ui(self.to_front)
             self.say("Syncing video to audio...")
-            obs_a = mono8k(t["raw"])
-            k, strength = t["k"], t["strength"] = find_offset(obs_a, mono8k(t["fn"]))
+            cam_a = mono8k(t["raw"])
+            k, strength = t["k"], t["strength"] = find_offset(cam_a, mono8k(t["fn"]))
             note = ""
             if strength < 8:  # nothing to match on (e.g. no playing at all): fall back to the timing guess
                 k, note = t["guess"], " (Couldn't hear the guitar in the video, sync is approximate.)"
             t["o0"] = k + t["offs"] + self.settings.get("video_lag_ms", 0) / 1000  # video time of mix time 0
             t["L"] = wav_len(t["mix"])
             t["amin"] = max(0.0, -t["o0"])
-            t["bmax"] = min(t["L"], len(obs_a) / 8000 - t["o0"])
+            t["bmax"] = min(t["L"], len(cam_a) / 8000 - t["o0"])
             t["peaks"] = peaks(t["mix"], W)
             self.a, self.b, self.ph = t["amin"], t["bmax"], t["amin"]
 
@@ -1147,9 +1104,16 @@ def selftest():
 
     rng = np.random.default_rng(1)
     take = rng.standard_normal(8000 * 5).astype(np.float32) * np.repeat(rng.random(50), 800).astype(np.float32)
-    obs = np.concatenate([rng.standard_normal(9872).astype(np.float32) * 0.01, take * 0.7 + 0.01, np.zeros(8000, np.float32)])
-    k, s = find_offset(obs, take)
+    vid = np.concatenate([rng.standard_normal(9872).astype(np.float32) * 0.01, take * 0.7 + 0.01, np.zeros(8000, np.float32)])
+    k, s = find_offset(vid, take)
     assert abs(k - 9872 / 8000) < 1 / 8000 and s > 8, (k, s)
+
+    listing = ("  vcodec=mjpeg  min s=1920x1080 fps=30 max s=1920x1080 fps=30\n"
+               "  pixel_format=nv12  min s=1920x1080 fps=15 max s=1920x1080 fps=30\n"
+               "  pixel_format=yuyv422  min s=2560x1440 fps=15 max s=2560x1440 fps=30\n"
+               "  pixel_format=nv12  min s=1280x720 fps=15 max s=1280x720 fps=60\n")
+    assert best_mode(listing) == ["-video_size", "1920x1080", "-framerate", "30", "-pixel_format", "nv12"], best_mode(listing)
+    assert best_mode("") == []
 
     assert video_encoder()[0] in ("h264_nvenc", "h264_amf", "h264_qsv", "libx264")
     assert os.path.exists(os.path.join(BUNDLE, "riffcam.ico"))
