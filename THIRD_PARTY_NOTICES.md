@@ -12,6 +12,8 @@ programs and libraries below, each under its own license.
 | imageio-ffmpeg | BSD-2-Clause | https://github.com/imageio/imageio-ffmpeg |
 | NumPy | BSD-3-Clause and others | https://github.com/numpy/numpy |
 | websocket-client | Apache-2.0 | https://github.com/websocket-client/websocket-client |
+| Pillow | MIT-CMU (HPND) | https://github.com/python-pillow/Pillow |
+| Fonts: Metal Mania, Russo One, VT323 | SIL Open Font License 1.1 (texts in `assets/fonts`) | https://github.com/google/fonts |
 | Python and Tcl/Tk (via PyInstaller) | PSF-2.0, Tcl/Tk license | https://www.python.org, https://www.tcl.tk |
 
 FFmpeg and Deno are separate programs that RiffCam starts as child processes; they are not linked

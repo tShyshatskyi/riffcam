@@ -1,24 +1,29 @@
-<p align="center"><img src="docs/icon.png" width="96" alt=""></p>
+<p align="center"><img src="docs/banner.png" alt="RiffCam: film yourself shredding"></p>
 
-<h1 align="center">RiffCam</h1>
+<p align="center">
+  <a href="../../releases/latest"><img src="https://img.shields.io/github/v/release/tShyshatskyi/riffcam?style=for-the-badge&color=9dff00&labelColor=111111&label=DOWNLOAD" alt="Download"></a>
+  <img src="https://img.shields.io/badge/WINDOWS-10%20%7C%2011-ff00aa?style=for-the-badge&labelColor=111111" alt="Windows 10 | 11">
+  <img src="https://img.shields.io/badge/LICENSE-MIT-ff1a3c?style=for-the-badge&labelColor=111111" alt="MIT">
+</p>
 
-<p align="center"><b>Film yourself playing guitar along with a song. One window, one button, no editing.</b></p>
-
-<p align="center"><img src="docs/screenshot.png" width="600" alt="RiffCam trimming a take"></p>
+<p align="center"><img src="docs/badges.png" alt="REAPER powered · OBS inside · best viewed on a CRT · no ads, no bloat · made in Ukraine"></p>
 
 Recording a play-along video usually means: download the backing track, record the guitar in your DAW,
-film yourself separately, then line everything up in a video editor. RiffCam does all of that for you:
+film yourself separately, then line everything up in a video editor. **RiffCam does all of that for you.**
 
-1. **Paste a YouTube link** (or pick an audio file) and choose where in the song to start.
-2. Hit **● REC** and play. You hear your amp plugin and the song through your audio interface, with
-   your usual low latency.
-3. Hit **■ STOP**, then **Keep** or **Delete** the take.
-4. **Trim** it: the video plays right in the window, click the waveform to jump around, set the start and
-   end, and **Export**. You get an MP4 in `Videos\RiffCam`.
+<p align="center"><img src="docs/screenshot.png" width="420" alt="Recording a take"> <img src="docs/trim.png" width="420" alt="Trimming a take"></p>
+
+1. **PASTE LINK** to a song on YouTube (or **OPEN FILE**) and drag **START** to where you want to come in.
+2. Smash **● REC** and play. You hear your amp plugin and the song through your audio interface, with your
+   usual low latency. The screen blinks `● REC` like a camcorder.
+3. Hit **■**, then **KEEP** or **TRASH** the take.
+4. **Trim** it: the video plays right in the window. Click the waveform to jump, hit **SPACE** to play,
+   **MARK IN / MARK OUT**, and **EXPORT**. You get an MP4 in `Videos\RiffCam`.
+5. Earn gamerscore. Unlock achievements. Tell nobody.
 
 ## How it works
 
-RiffCam drives two free/cheap tools you may already have:
+RiffCam drives two tools you may already have:
 
 - **REAPER** is the amp and the recorder. It plays the song and records your *dry* guitar through ASIO,
   in perfect sync with the song (REAPER compensates its own latency). Your amp sim (Neural DSP, Line 6
@@ -27,7 +32,7 @@ RiffCam drives two free/cheap tools you may already have:
 
 After a take, REAPER renders exactly what you heard (amp, song, faders, master FX), and RiffCam finds
 where the REAPER take sits inside the OBS recording by matching the two copies of your dry guitar.
-That puts the video in sync with the sound to the millisecond, with no clapping or manual nudging.
+That puts the video in sync with the sound to the millisecond: no clapping, no manual nudging.
 
 ## Requirements
 
@@ -38,29 +43,33 @@ That puts the video in sync with the sound to the millisecond, with no clapping 
 
 ## Install
 
-1. Download `RiffCam-windows.zip` from [Releases](../../releases) and unzip it anywhere.
+1. Download `RiffCam-windows.zip` from [Releases](../../releases/latest) and unzip it anywhere.
 2. Run `RiffCam.exe`.
 
 There's nothing else to install: FFmpeg, yt-dlp and everything else ship inside the zip.
 
 ## First run
 
-1. **RiffCam setup** opens: pick your **camera** and the **input your guitar is plugged into**
+<img src="docs/setup.png" width="360" align="right" alt="Setup">
+
+1. **SETUP** opens: pick your **camera** and the **input your guitar is plugged into**
    (for example `Analogue 1 + 2 (Focusrite USB Audio)`). RiffCam creates its own OBS profile and scene
    for this; your other OBS settings stay as they are.
 2. **In REAPER**, once:
    - *Options > Preferences > Audio > Device*: choose your interface's **ASIO** driver.
    - On the **Guitar** track (it's armed for recording), choose your guitar's input and add your amp
-     plugin with the **FX** button. The **🎛 Amp** button in RiffCam opens it too.
+     plugin with the **FX** button. The **AMP** button in RiffCam opens it too.
 
-Change the camera or input later with the **⚙** button.
+Change the camera or input later with **SETUP**.
+
+<br clear="right">
 
 ## Tips
 
 - **Song levels:** the song plays on REAPER's **Backing** track. Set its fader and your guitar track's
   fader in REAPER; the video gets exactly that mix.
-- **Start a bit early.** Set *Start at* a few seconds before the part you want, and trim later.
-- **Picture lags the sound?** Webcams are often a little late. Raise *Video delay* in **⚙** setup
+- **Start a bit early.** Set *START* a few seconds before the part you want, and trim later.
+- **Picture lags the sound?** Webcams are often a little late. Raise *Video delay* in **SETUP**
   (try 50 to 150 ms).
 - **Files:** finished videos go to `Videos\RiffCam`. The raw camera recording and your dry guitar stay in
   `Videos\RiffCam\raw`, so a take can be re-amped later.
@@ -68,12 +77,12 @@ Change the camera or input later with the **⚙** button.
 ## Troubleshooting
 
 - **"REAPER didn't start recording"**: REAPER's evaluation reminder (or another dialog) is open in
-  REAPER. Close it and press REC again. Also check that a track is armed.
+  REAPER. Close it and hit REC again. Also check that a track is armed.
 - **OBS shows an "update available" window** at start: choose *Remind me later* or update OBS.
 - **A YouTube link stops working**: YouTube changes often. Grab the latest RiffCam release (it ships a
-  newer yt-dlp), or use **📂 File**.
+  newer yt-dlp), or use **OPEN FILE**.
 - **Settings and the REAPER project** live in `%APPDATA%\RiffCam`. Delete `settings.json` to run setup
-  again.
+  again (your gamerscore lives there too, so maybe don't).
 
 ## Run from source
 
@@ -85,7 +94,10 @@ python -m venv .venv
 .\build.ps1                              # builds dist\RiffCam-windows.zip
 ```
 
+The whole look is drawn in code with Pillow (`skin.py`); `tools/make_art.py` redraws the icon and the
+images in `docs/`.
+
 ## License
 
-MIT, see [LICENSE](LICENSE). The release zip bundles third-party programs under their own licenses,
-listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+MIT, see [LICENSE](LICENSE). The release zip bundles third-party programs and fonts under their own
+licenses, listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

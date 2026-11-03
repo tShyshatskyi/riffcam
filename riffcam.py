@@ -14,6 +14,28 @@ import numpy as np
 import imageio_ffmpeg
 import websocket
 import yt_dlp
+from PIL import ImageTk
+import ctypes.wintypes
+import skin
+
+
+def dpi_scale():
+    """Draw at the screen's real pixel density instead of letting Windows stretch (and blur) the window."""
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        return ctypes.windll.user32.GetDpiForSystem() / 96
+    except Exception:
+        return 1.0
+
+
+K = skin.Z = dpi_scale()
+
+
+def k(v):
+    return round(v * K)
+
+
+W, H = k(496), k(279)  # camera picture
 
 APP = "RiffCam"
 BUNDLE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))  # template.rpp (+ deno.exe in the .exe build)
@@ -29,8 +51,6 @@ DENO = os.path.join(BUNDLE, "deno.exe")  # JS runtime yt-dlp needs for YouTube; 
 NOWIN = subprocess.CREATE_NO_WINDOW
 CAM, GTR = "RiffCam Camera", "RiffCam Guitar"  # OBS source names
 SR = 48000
-W, H = 560, 315
-BG = "#111"
 
 
 def installed(key, exe, default):
@@ -371,83 +391,194 @@ def to_recycle_bin(*paths):
                             f"'{p}', 'OnlyErrorDialogs', 'SendToRecycleBin')"], check=True, creationflags=NOWIN)
 
 
-def F(size, weight="normal"):
-    return ("Segoe UI", size, weight)
+def load_fonts():
+    """Make the bundled fonts usable by Tk, for this process only."""
+    for f in os.listdir(skin.FONTS):
+        if f.endswith(".ttf"):
+            ctypes.windll.gdi32.AddFontResourceExW(os.path.join(skin.FONTS, f), 0x10, 0)  # FR_PRIVATE
+
+
+def UI(size):
+    return ("Russo One", size)
+
+
+def LCD(size):
+    return ("VT323", size)
+
+
+# window layout, in design pixels (k() turns them into real ones)
+WIN_W, WIN_H = 536, 610
+HEADER = (0, 0, 536, 52)
+PV = (20, 64)  # camera picture, W x H
+BEZEL = (8, 54, 528, 372)
+PANEL = (8, 380, 528, 482)
+ROW = 522  # big buttons
+LCD_BOX = (8, 562, 528, 604)
+WAVE_H = k(50)
+ACHIEVEMENTS = {1: "FIRST BLOOD", 5: "WARMED UP", 10: "ON FIRE", 25: "AXE MASTER", 50: "FRETBOARD LEGEND", 100: "ROCK GOD"}
+
+
+def kbox(box):
+    return tuple(k(v) for v in box)
+
+
+class Sprite:
+    """A skinned button on a canvas: one image per state, rendered on first use."""
+
+    def __init__(self, c, x, y, render, command):
+        self.c, self.command, self.on, self.state = c, command, True, "normal"
+        self.id = c.create_image(x, y, state="hidden")
+        self.skin(render)
+        c.tag_bind(self.id, "<Enter>", lambda e: self.paint("hover"))
+        c.tag_bind(self.id, "<Leave>", lambda e: self.paint("normal"))
+        c.tag_bind(self.id, "<ButtonPress-1>", lambda e: self.paint("pressed"))
+        c.tag_bind(self.id, "<ButtonRelease-1>", self.release)
+
+    def skin(self, render):
+        self.render, self.imgs = render, {}
+        self.paint(self.state)
+
+    def paint(self, state):
+        self.state = state
+        shown = state if self.on else "disabled"
+        if shown not in self.imgs:
+            self.imgs[shown] = ImageTk.PhotoImage(self.render(shown))
+        self.c.itemconfig(self.id, image=self.imgs[shown])
+        self.c.config(cursor="hand2" if self.on and state != "normal" else "")
+
+    def release(self, e):
+        if self.on and self.state == "pressed":
+            self.paint("hover")
+            self.command()
+
+    def show(self, on):
+        self.c.itemconfig(self.id, state="normal" if on else "hidden")
+
+    def enable(self, on):
+        self.on = on
+        self.paint("normal")
+
+
+class Slider:
+    """Neon slider with a chrome knob."""
+
+    def __init__(self, c, x0, y, length, command):
+        self.c, self.x0, self.y, self.len, self.command = c, x0, y, length, command
+        self.to, self.value, self.on = 0.0, 0.0, True
+        self.track = c.create_rectangle(x0, y - k(4), x0 + length, y + k(4), fill="#030603", outline="#000", width=k(2))
+        self.fill = c.create_rectangle(x0, y - k(3), x0, y + k(3), fill=skin.ACID_HEX, outline="")
+        self.knob_img = ImageTk.PhotoImage(skin.knob(k(16)))
+        self.knob = c.create_image(x0, y, image=self.knob_img)
+        for item in (self.track, self.fill, self.knob):
+            c.tag_bind(item, "<ButtonPress-1>", self.drag)
+            c.tag_bind(item, "<B1-Motion>", self.drag)
+
+    def drag(self, e):
+        if self.on and self.to:
+            self.set((e.x - self.x0) / self.len * self.to)
+
+    def set(self, v):
+        self.value = round(min(max(v, 0.0), self.to) * 2) / 2  # half-second steps
+        x = self.x0 + (self.value / self.to * self.len if self.to else 0)
+        self.c.coords(self.fill, self.x0, self.y - k(3), x, self.y + k(3))
+        self.c.coords(self.knob, x, self.y)
+        self.command(self.value)
+
+    def get(self):
+        return self.value
+
+    def show(self, on):
+        for item in (self.track, self.fill, self.knob):
+            self.c.itemconfig(item, state="normal" if on else "hidden")
+
+    def enable(self, on):
+        self.on = on
+        self.c.itemconfig(self.fill, fill=skin.ACID_HEX if on else "#3a4a2a")
 
 
 class App:
     def __init__(self, root):
         self.root, self.obs, self.started, self.live = root, None, 0, True
         self.song, self.song_len, self.take = None, 0.0, None
+        self.playing, self.vid, self.frame_busy, self.snip_n = None, None, False, 0
         self.settings = load_settings()
         root.title(APP)
         root.resizable(False, False)
-        root.configure(bg=BG)
         root.protocol("WM_DELETE_WINDOW", self.close)
+        root.iconbitmap(os.path.join(BUNDLE, "riffcam.ico"))
         for d in (DATA, SONGS, TMP, RAW):
             os.makedirs(d, exist_ok=True)
 
-        self.blank = tk.PhotoImage(width=W, height=H)  # fixes the label size in pixels
-        self.view = tk.Label(root, bg="#000", fg="#888", text="camera…", image=self.blank, compound="center", font=F(12))
-        self.view.pack(padx=12, pady=(12, 6))
+        c = self.c = tk.Canvas(root, width=k(WIN_W), height=k(WIN_H), highlightthickness=0, bg="#000")
+        c.pack()
+        wa = ctypes.wintypes.RECT()
+        ctypes.windll.user32.SystemParametersInfoW(0x30, 0, ctypes.byref(wa), 0)  # SPI_GETWORKAREA
+        root.geometry(f"+{max(0, (wa.right - k(WIN_W)) // 2)}+{max(0, (wa.bottom - k(WIN_H) - k(32)) // 2)}")
+        px, py0 = k(PV[0]), k(PV[1])
+        self.bg = ImageTk.PhotoImage(skin.background(k(WIN_W), k(WIN_H), kbox(HEADER), kbox(BEZEL), (px, py0, W, H),
+                                                     kbox(PANEL), kbox(LCD_BOX)))
+        c.create_image(0, 0, image=self.bg, anchor="nw")
+        self.logo = ImageTk.PhotoImage(skin.chrome_text(APP, k(40)))
+        c.create_image(k(2), k(26), image=self.logo, anchor="w")
+        c.create_text(k(WIN_W - 16), k(13), text="GAMERSCORE", font=UI(7), fill="#8a9098", anchor="e")
+        self.score = c.create_text(k(WIN_W - 14), k(33), text="", font=LCD(24), fill=skin.ACID_HEX, anchor="e")
+        self.show_score()
 
-        small = dict(font=F(10), bg="#333", fg="white", activebackground="#444", activeforeground="white", relief="flat", padx=8)
-        self.small = small
-        lbl = dict(bg=BG, fg="#ddd", font=F(10))
+        # camera screen: picture, scanlines, REC light, achievement toast
+        self.blank = ImageTk.PhotoImage(skin.static(W, H))
+        self.view = c.create_image(px, py0, image=self.blank, anchor="nw")
+        self.crt = ImageTk.PhotoImage(skin.crt_overlay(W, H))
+        c.create_image(px, py0, image=self.crt, anchor="nw")
+        self.rec_light = c.create_text(px + k(16), py0 + k(20), text="", font=LCD(26), fill=skin.HOT_HEX, anchor="w")
+        self.toast_xy = (k(WIN_W) // 2, py0 + H - k(46))
+        self.toast = c.create_image(*self.toast_xy, state="hidden")
 
-        # song: where it comes from and where to start
-        self.songbar = tk.Frame(root, bg=BG)
-        r1 = tk.Frame(self.songbar, bg=BG)
-        r1.pack(fill="x", pady=2)
-        self.b_link = tk.Button(r1, text="📋 Paste link", command=self.paste_link, **small)
-        self.b_file = tk.Button(r1, text="📂 File", command=self.pick_file, **small)
-        self.b_link.pack(side="left")
-        self.b_file.pack(side="left", padx=6)
-        self.song_lbl = tk.Label(r1, text="No song: guitar only", anchor="w", width=44, **lbl)
-        self.song_lbl.pack(side="left", padx=6)
-        r2 = tk.Frame(self.songbar, bg=BG)
-        r2.pack(fill="x", pady=2)
-        tk.Label(r2, text="Start at", **lbl).pack(side="left")
-        self.pos = tk.Scale(r2, from_=0, to=0, resolution=0.5, orient="horizontal", showvalue=False, length=370,
-                            bg=BG, fg="white", troughcolor="#333", highlightthickness=0, bd=0,
-                            command=lambda v: self.pos_lbl.config(text=fmt(float(v))))
-        self.pos.pack(side="left", padx=6)
-        self.pos_lbl = tk.Label(r2, text="0:00.0", width=7, **lbl)
-        self.pos_lbl.pack(side="left")
-        self.b_listen = tk.Button(r2, text="▶ 5 s", command=self.listen, **small)
-        self.b_listen.pack(side="left", padx=6)
+        def btn(x, y, w, h, label, kind="metal", command=None, icon=None, size=None):
+            return Sprite(c, k(x), y, lambda st: skin.button(k(w), k(h), label, kind, st, k(size), icon), command)
+
+        # song panel
+        py = k(PANEL[1])
+        self.b_link = btn(84, py + k(24), 124, 28, "PASTE LINK", command=self.paste_link, size=11)
+        self.b_file = btn(206, py + k(24), 104, 28, "OPEN FILE", command=self.pick_file, size=11)
+        c.create_text(k(270), py + k(24), text="NO SONG: GUITAR ONLY", font=UI(9), fill="#e8ecef", anchor="w",
+                      width=k(250), tags=("song", "song_title"))
+        c.create_text(k(24), py + k(68), text="START", font=UI(8), fill="#9aa3ab", anchor="w", tags="song")
+        self.pos = Slider(c, k(76), py + k(68), k(296), lambda v: c.itemconfig("pos_lbl", text=fmt(v)))
+        c.create_text(k(384), py + k(68), text="0:00.0", font=LCD(22), fill=skin.ACID_HEX, anchor="w", tags=("song", "pos_lbl"))
+        self.b_listen = btn(488, py + k(68), 68, 28, "5S", command=self.listen, icon="play", size=11)
         self.song_widgets = (self.b_link, self.b_file, self.pos, self.b_listen)
 
-        # trim: waveform with a playhead and start/end markers, plays the video with the sound
-        self.trimbar = tk.Frame(root, bg=BG)
-        self.wave = tk.Canvas(self.trimbar, width=W, height=70, bg="#1b1b1b", highlightthickness=0)
-        self.wave.pack()
+        # trim panel: waveform with a playhead and in/out markers, plays the video with the sound
+        self.wave = tk.Canvas(root, width=W, height=WAVE_H, bg="#040904", highlightthickness=1, highlightbackground="#000")
+        c.create_window(px, py + k(10), window=self.wave, anchor="nw", tags="trim")
         self.wave.bind("<Button-1>", self.wave_press)
         self.wave.bind("<B1-Motion>", self.wave_move)
         self.wave.bind("<ButtonRelease-1>", self.wave_release)
         self.wave.bind("<Motion>", lambda e: self.wave.config(cursor="sb_h_double_arrow" if self.near_mark(e.x) else "hand2"))
-        r3 = tk.Frame(self.trimbar, bg=BG)
-        r3.pack(fill="x", pady=4)
-        self.b_play = tk.Button(r3, text="▶", width=3, command=self.toggle_play, **small)
-        self.b_play.pack(side="left")
-        tk.Button(r3, text="⟦ Start here", command=lambda: self.set_mark("a", self.ph), **small).pack(side="left", padx=6)
-        tk.Button(r3, text="End here ⟧", command=lambda: self.set_mark("b", self.ph), **small).pack(side="left")
-        self.trim_lbl = tk.Label(r3, text="", **lbl)
-        self.trim_lbl.pack(side="left", padx=10)
+        ty = py + k(80)
+        self.b_play = Sprite(c, k(42), ty, lambda st: skin.button(k(42), k(28), "", "acid", st,
+                                                                  icon="pause" if self.playing else "play"), self.toggle_play)
+        self.b_in = btn(122, ty, 98, 28, "MARK IN", command=lambda: self.set_mark("a", self.ph), icon="in", size=10)
+        self.b_out = btn(228, ty, 98, 28, "MARK OUT", command=lambda: self.set_mark("b", self.ph), icon="out", size=10)
+        c.create_text(k(286), ty, text="", font=LCD(18), fill=skin.ACID_HEX, anchor="w", tags=("trim", "trim_lbl"))
+        self.trim_widgets = (self.b_play, self.b_in, self.b_out)
         root.bind("<space>", lambda e: self.cur_mode == "trim" and self.toggle_play())
-        self.playing, self.vid, self.frame_busy, self.snip_n = None, None, False, 0
 
-        bar = tk.Frame(root, bg=BG)
-        self.bar = bar
-        big = dict(font=F(18, "bold"), fg="white", relief="flat", activeforeground="white", width=9)
-        self.rec = tk.Button(bar, text="● REC", bg="#c62828", activebackground="#8e0000", command=self.toggle, **big)
-        self.tone = tk.Button(bar, text="🎛 Amp", bg="#37474f", activebackground="#263238", command=self.show_tone, **big)
-        self.gear = tk.Button(bar, text="⚙", bg="#37474f", activebackground="#263238", command=self.reconfigure,
-                              **{**big, "width": 2})
-        self.keep = tk.Button(bar, text="✓ Keep", bg="#2e7d32", activebackground="#1b5e20", command=self.process, **big)
-        self.drop = tk.Button(bar, text="✗ Delete", bg="#555", activebackground="#333", command=self.delete, **big)
-        self.done = tk.Button(bar, text="✓ Export", bg="#2e7d32", activebackground="#1b5e20", command=self.export, **big)
-        self.msg = tk.Label(root, text="Starting REAPER and OBS…", font=F(11), bg=BG, fg="#ddd", wraplength=W, justify="center")
+        # big buttons
+        self.rec_render = lambda st: skin.orb(k(70), "REC", "red", st)
+        self.stop_render = lambda st: skin.orb(k(70), "", "red", st, stop=True)
+        row = k(ROW)
+        self.rec = Sprite(c, k(WIN_W) // 2, row, self.rec_render, self.toggle)
+        self.tone = btn(134, row, 112, 40, "AMP", command=self.show_tone, size=15)
+        self.gear = btn(402, row, 112, 40, "SETUP", command=self.reconfigure, icon="gear", size=13)
+        self.keep = btn(180, row, 160, 46, "KEEP", "acid", self.process, icon="check", size=17)
+        self.done = btn(180, row, 160, 46, "EXPORT", "acid", self.export, icon="check", size=17)
+        self.drop = btn(356, row, 160, 46, "TRASH", "red", self.delete, icon="cross", size=17)
+        self.big = (self.rec, self.tone, self.gear, self.keep, self.done, self.drop)
+
+        self.msg = c.create_text(k(LCD_BOX[0] + 14), k(LCD_BOX[1] + LCD_BOX[3]) // 2, text="", font=LCD(16),
+                                 fill=skin.ACID_HEX, anchor="w", width=k(LCD_BOX[2] - LCD_BOX[0] - 26))
+        self.say("Booting REAPER + OBS...")
         self.mode("busy")
         threading.Thread(target=self.connect, daemon=True).start()
 
@@ -456,25 +587,46 @@ class App:
         self.root.after(0, fn)
 
     def say(self, text):
-        self.ui(lambda: self.msg.config(text=text))
+        self.ui(lambda: self.c.itemconfig(self.msg, text="> " + text.upper()))
 
     def mode(self, m):
         """idle (song + record) / stopped (keep or bin) / trim (cut and export) / busy."""
-        for w in (self.songbar, self.trimbar, self.bar, self.msg, self.rec, self.tone, self.gear, self.keep, self.drop, self.done):
-            w.pack_forget()
         self.stop_play()
         self.cur_mode = m
         self.live = m != "trim"
-        (self.trimbar if m == "trim" else self.songbar).pack(padx=12, fill="x")
-        self.bar.pack(padx=12, pady=8)
-        buttons = {"idle": (self.rec, self.tone, self.gear), "stopped": (self.keep, self.drop),
-                   "trim": (self.done, self.drop), "busy": ()}[m]
-        for b in buttons:
-            b.config(state="normal")
-            b.pack(side="left", padx=6)
+        shown = {"idle": (self.rec, self.tone, self.gear), "stopped": (self.keep, self.drop),
+                 "trim": (self.done, self.drop), "busy": ()}[m]
+        for b in self.big:
+            b.show(b in shown)
+            if b in shown:
+                b.enable(True)
         for w in self.song_widgets:
-            w.config(state="normal" if m == "idle" else "disabled")
-        self.msg.pack(padx=12, pady=(0, 12))
+            w.show(m != "trim")
+            w.enable(m == "idle")
+        for w in self.trim_widgets:
+            w.show(m == "trim")
+        self.c.itemconfig("song", state="hidden" if m == "trim" else "normal")
+        self.c.itemconfig("trim", state="normal" if m == "trim" else "hidden")
+
+    def show_score(self):
+        self.c.itemconfig(self.score, text=f"{self.settings.get('gamerscore', 0)}G")
+
+    def achievement(self):
+        """Every export earns gamerscore; milestones pop an Xbox-style toast."""
+        s = self.settings
+        s["exports"] = s.get("exports", 0) + 1
+        name = ACHIEVEMENTS.get(s["exports"])
+        points = 50 if name else 10
+        s["gamerscore"] = s.get("gamerscore", 0) + points
+        json.dump(s, open(SETTINGS, "w", encoding="utf-8"), indent=2)
+        self.show_score()
+        self.toast_img = ImageTk.PhotoImage(skin.toast("ACHIEVEMENT UNLOCKED" if name else "TAKE EXPORTED",
+                                                       f"{points}G – {name or 'Nice one'}"))
+        x, y = self.toast_xy
+        self.c.itemconfig(self.toast, image=self.toast_img, state="normal")
+        for i in range(10):  # slide up
+            self.root.after(i * 25, lambda i=i: self.c.coords(self.toast, x, y + k(30) - i * k(3)))
+        self.root.after(4500, lambda: self.c.itemconfig(self.toast, state="hidden"))
 
     def connect(self):
         missing = [n for n, p in (("REAPER (reaper.fm)", REAPER), ("OBS Studio (obsproject.com)", OBS)) if not p]
@@ -490,7 +642,7 @@ class App:
                     break
                 time.sleep(0.5)
             else:
-                self.say("Couldn't close the running OBS. Close it yourself (also in the tray by the clock) and start RiffCam again.")
+                self.say("Couldn't close the running OBS. Close it yourself (also in the tray) and start RiffCam again.")
                 return
         if not running("reaper.exe"):
             subprocess.Popen([REAPER, AMP])
@@ -499,7 +651,7 @@ class App:
                          cwd=os.path.dirname(OBS))
         self.obs = obs_connect()
         if not self.obs:
-            self.say("OBS isn't answering. Close OBS completely (also in the tray by the clock) and start RiffCam again.")
+            self.say("OBS isn't answering. Close OBS completely (also in the tray) and start RiffCam again.")
             return
         self.configure_obs(ask=False)
         threading.Thread(target=self.preview, daemon=True).start()
@@ -517,36 +669,50 @@ class App:
         except Exception as e:
             self.say(f"OBS setup failed: {e}")
             return
-        self.say("Paste a song link (or pick a file), choose where to start, and hit REC.\n"
-                 "If REAPER shows its license window, close it.")
+        self.say("Ready to shred. Paste a song link or open a file, set the start, hit REC. "
+                 "(Close REAPER's license popup if it shows.)")
         self.ui(lambda: self.mode("idle"))
 
     def setup_dialog(self, cams, mics, done):
         s = self.settings
-        d = tk.Toplevel(self.root, bg=BG, padx=16, pady=12)
+        d = tk.Toplevel(self.root, bg="#0b0d0e", padx=18, pady=14)
         d.title(f"{APP} setup")
         d.transient(self.root)
         d.resizable(False, False)
-        lbl = dict(bg=BG, fg="#ddd", font=F(10), anchor="w", justify="left")
+        d.iconbitmap(os.path.join(BUNDLE, "riffcam.ico"))
+        st = ttk.Style(d)
+        st.theme_use("clam")
+        st.configure("Riff.TCombobox", fieldbackground="#030603", background="#2a2d31", foreground=skin.ACID_HEX,
+                     arrowcolor=skin.ACID_HEX, bordercolor="#000", lightcolor="#2a2d31", darkcolor="#000")
+        st.map("Riff.TCombobox", fieldbackground=[("readonly", "#030603")], foreground=[("readonly", skin.ACID_HEX)],
+               selectbackground=[("readonly", "#030603")], selectforeground=[("readonly", skin.ACID_HEX)])
+        d.option_add("*TCombobox*Listbox.background", "#030603")
+        d.option_add("*TCombobox*Listbox.foreground", skin.ACID_HEX)
+        d.option_add("*TCombobox*Listbox.selectBackground", skin.PINK_HEX)
+        d.option_add("*TCombobox*Listbox.font", LCD(16))
+        lbl = dict(bg="#0b0d0e", fg="#e8ecef", font=UI(10), anchor="w", justify="left")
+        self.setup_logo = ImageTk.PhotoImage(skin.chrome_text("SETUP", k(30), skin.UI_FONT, skin.PINK, flare_at=0.9))
+        tk.Label(d, image=self.setup_logo, bg="#0b0d0e").pack(anchor="w")
 
         def pick(label, options, current):
-            tk.Label(d, text=label, **lbl).pack(fill="x", pady=(8, 2))
-            box = ttk.Combobox(d, values=[n for n, _ in options], state="readonly", width=60)
+            tk.Label(d, text=label, **lbl).pack(fill="x", pady=(10, 3))
+            box = ttk.Combobox(d, values=[n for n, _ in options], state="readonly", width=52, style="Riff.TCombobox", font=LCD(16))
             ids = [v for _, v in options]
             box.current(ids.index(current) if current in ids else 0)
             box.pack(fill="x")
             return lambda: ids[box.current()]
-        cam = pick("Camera", cams, s.get("camera"))
-        mic = pick("Guitar input: your audio interface's input the guitar is plugged into", mics, s.get("audio"))
-        tk.Label(d, text="Video delay in ms (raise it if the picture lags behind the sound)", **lbl).pack(fill="x", pady=(8, 2))
-        lag = tk.Spinbox(d, from_=0, to=1000, increment=10, width=8)
+        cam = pick("CAMERA", cams, s.get("camera"))
+        mic = pick("GUITAR INPUT  (the audio interface input your guitar is plugged into)", mics, s.get("audio"))
+        tk.Label(d, text="VIDEO DELAY, MS  (raise it if the picture lags the sound)", **lbl).pack(fill="x", pady=(10, 3))
+        lag = tk.Spinbox(d, from_=0, to=1000, increment=10, width=8, font=LCD(18), bg="#030603", fg=skin.ACID_HEX,
+                         buttonbackground="#2a2d31", insertbackground=skin.ACID_HEX, relief="flat")
         lag.delete(0, "end")
         lag.insert(0, s.get("video_lag_ms", 0))
         lag.pack(anchor="w")
-        tk.Label(d, wraplength=480, **lbl, text=(
-            "\nIn REAPER (once): Options > Preferences > Audio > Device: pick your interface's ASIO driver. "
-            "Then on the armed track ('Guitar'), choose the input your guitar is on and add your amp plugin "
-            "with the FX button (or the 🎛 Amp button here). RiffCam records whatever that track sounds like.")).pack(fill="x")
+        tk.Label(d, wraplength=k(470), **{**lbl, "fg": "#9aa3ab", "font": UI(9)}, text=(
+            "\nIN REAPER (ONCE): Options > Preferences > Audio > Device: pick your interface's ASIO driver. "
+            "Then on the armed track ('Guitar') choose your guitar's input and add your amp plugin with the FX "
+            "button (or AMP here). RiffCam records whatever that track sounds like.")).pack(fill="x")
 
         def save():
             try:
@@ -557,7 +723,10 @@ class App:
             json.dump(s, open(SETTINGS, "w", encoding="utf-8"), indent=2)
             d.destroy()
             done.set()
-        tk.Button(d, text="Save", command=save, **{**self.small, "font": F(11, "bold"), "bg": "#2e7d32"}).pack(pady=(12, 0))
+        bc = tk.Canvas(d, width=k(180), height=k(66), bg="#0b0d0e", highlightthickness=0)
+        bc.pack(pady=(12, 0))
+        self.save_btn = Sprite(bc, k(90), k(33), lambda st: skin.button(k(150), k(42), "SAVE", "acid", st, k(16), "check"), save)
+        self.save_btn.show(True)
         d.protocol("WM_DELETE_WINDOW", save)
         d.grab_set()
 
@@ -572,7 +741,7 @@ class App:
             if not obs("GetVirtualCamStatus")["outputActive"]:
                 obs("StartVirtualCam")
         except Exception:
-            return self.ui(lambda: self.view.config(image=self.blank, text="no preview (OBS Virtual Camera unavailable)"))
+            return
         time.sleep(1)
         self.ffplay = subprocess.Popen([FFMPEG, "-loglevel", "quiet", "-f", "dshow", "-i", "video=OBS Virtual Camera",
                                         "-vf", f"scale={W}:{H}", "-r", "25", "-f", "rawvideo", "-pix_fmt", "rgb24",
@@ -582,12 +751,12 @@ class App:
             if self.live and not self.frame_busy:  # drop frames instead of piling them up if Tk is behind
                 self.frame_busy = True
                 self.ui(lambda d=head + buf: self.show_frame(d))
-        self.ui(lambda: self.view.config(image=self.blank, text="no preview"))
+        self.ui(lambda: self.c.itemconfig(self.view, image=self.blank))
 
     def show_frame(self, data, still=False):
         if self.live or still:
             self.frame = tk.PhotoImage(data=data, format="ppm")  # keep a reference or Tk drops it
-            self.view.config(image=self.frame, text="")
+            self.c.itemconfig(self.view, image=self.frame)
         self.frame_busy = False
 
     def close(self):
@@ -615,19 +784,19 @@ class App:
         except tk.TclError:
             url = ""
         if not url.startswith("http"):
-            self.msg.config(text="No link in the clipboard. Copy the video address in your browser and click again.")
+            self.say("No link in the clipboard. Copy the video address in your browser and click again.")
             return
-        self.load_song(lambda: fetch_song(url), "Downloading the song…")
+        self.load_song(lambda: fetch_song(url), "Downloading the song...")
 
     def pick_file(self):
         path = filedialog.askopenfilename(title="Song", filetypes=[("Audio/video", "*.mp3 *.wav *.m4a *.flac *.ogg *.webm *.mp4"), ("All", "*.*")])
         if path:
-            self.load_song(lambda: song_from_file(path), "Preparing the song…")
+            self.load_song(lambda: song_from_file(path), "Loading the song...")
 
     def load_song(self, get, text):
-        self.msg.config(text=text)
+        self.say(text)
         for w in self.song_widgets:
-            w.config(state="disabled")
+            w.enable(False)
 
         def go():
             try:
@@ -636,14 +805,14 @@ class App:
 
                 def done():
                     self.song, self.song_len = wav, length
-                    self.song_lbl.config(text=f"🎵 {title}  ({fmt(length)})")
-                    self.pos.config(to=length)
+                    self.c.itemconfig("song_title", text=f"{title[:42]}  ({fmt(length)})")
+                    self.pos.to = length
                     self.pos.set(0)
-                    self.msg.config(text="Song ready. Choose where to start (▶ 5 s to listen) and hit REC.")
+                    self.say("Song loaded. Set the start (5S to preview it) and hit REC.")
                 self.ui(done)
             except Exception as e:
                 self.say(f"Couldn't get the song: {e}")
-            self.ui(lambda: [w.config(state="normal") for w in self.song_widgets])
+            self.ui(lambda: [w.enable(True) for w in self.song_widgets])
         threading.Thread(target=go, daemon=True).start()
 
     def listen(self):
@@ -659,12 +828,12 @@ class App:
     # ---------- recording ----------
     def toggle(self):
         if not running("reaper.exe"):
-            self.msg.config(text="REAPER is closed. Click 🎛 Amp to open it, then try again.")
+            self.say("REAPER is closed. Hit AMP to open it, then try again.")
             return
-        self.rec.config(state="disabled")
+        self.rec.enable(False)
         if not self.started:
             for w in (self.tone, self.gear, *self.song_widgets):
-                w.config(state="disabled")
+                w.enable(False)
             threading.Thread(target=self.start_take, args=(self.song, self.pos.get()), daemon=True).start()
         else:
             threading.Thread(target=self.stop_take, daemon=True).start()
@@ -678,23 +847,28 @@ class App:
         if not wait_for(ok, 8):
             raw = self.obs("StopRecord")["outputPath"]
             threading.Thread(target=lambda: (wait_file_done(raw), to_recycle_bin(raw)), daemon=True).start()
-            self.say("REAPER didn't start recording. Is a dialog open in REAPER (license etc.)? "
-                     "Is a track armed for recording? Fix that and try again.")
+            self.say("REAPER didn't start recording. Close any popup in REAPER (license etc.), "
+                     "check a track is armed, and try again.")
             self.ui(lambda: self.mode("idle"))
             return
         self.take = {"song": song, "start": start, "guess": time.time() - t_obs}  # rough offset if matching fails
         self.started = time.time()
+        self.say("Recording. Give it everything.")
 
         def recording():
-            self.rec.config(text="■ STOP", bg="#333", state="normal")
+            self.rec.skin(self.stop_render)
+            self.rec.enable(True)
             self.tick()
         self.ui(recording)
 
     def tick(self):
         if self.started:
             s = int(time.time() - self.started)
-            self.msg.config(text=f"● Recording  {s // 60}:{s % 60:02d}")
-            self.root.after(500, self.tick)
+            blink = "●" if int((time.time() - self.started) * 2) % 2 == 0 else " "
+            self.c.itemconfig(self.rec_light, text=f"{blink} REC {s // 60:02d}:{s % 60:02d}")
+            self.root.after(250, self.tick)
+        else:
+            self.c.itemconfig(self.rec_light, text="")
 
     def stop_take(self):
         self.started = 0
@@ -702,12 +876,12 @@ class App:
         reaper_lua("stop", LUA_STOP.format(out=info))
         got = wait_for(info, 15)
         self.take["raw"] = self.obs("StopRecord")["outputPath"]  # after REAPER, so the video covers the whole take
-        self.ui(lambda: self.rec.config(text="● REC", bg="#c62828"))
+        self.ui(lambda: self.rec.skin(self.rec_render))
         if got:
             fn, pos, length, offs, proj = open(info, encoding="utf-8", errors="replace").read().split("|")
             if fn:
                 self.take.update(fn=fn, pos=float(pos), len=float(length), offs=float(offs), proj=proj)
-                self.say("Keep this take or delete it?")
+                self.say("Keep this take or trash it?")
                 self.ui(lambda: self.mode("stopped"))
                 return
         self.say("REAPER recorded nothing (is the guitar track armed?). The video stayed in raw\\.")
@@ -722,7 +896,7 @@ class App:
             try:
                 wait_file_done(t["raw"])
                 to_recycle_bin(t["raw"], t.get("mix"))
-                self.say("Take moved to the Recycle Bin. Another one?")
+                self.say("Take sent to the Recycle Bin. Run it back?")
             except Exception as e:
                 self.say(f"Couldn't delete: {e}")
             try:
@@ -739,16 +913,16 @@ class App:
     def _process(self):
         t = self.take
         try:
-            self.say("REAPER is rendering your take with the song…")
+            self.say("REAPER is rendering your take with the song...")
             wait_file_done(t["raw"])
             t["mix"] = os.path.join(TMP, "mix.wav")
             render(t["proj"], t["pos"], t["pos"] + t["len"], t["mix"])  # mix time 0 = take start
-            self.say("Lining the video up with the sound…")
+            self.say("Syncing video to audio...")
             obs_a = mono8k(t["raw"])
             k, strength = t["k"], t["strength"] = find_offset(obs_a, mono8k(t["fn"]))
             note = ""
             if strength < 8:  # nothing to match on (e.g. no playing at all): fall back to the timing guess
-                k, note = t["guess"], "\n(Couldn't recognise the guitar in the video's audio, so the sync is approximate.)"
+                k, note = t["guess"], " (Couldn't hear the guitar in the video, sync is approximate.)"
             t["o0"] = k + t["offs"] + self.settings.get("video_lag_ms", 0) / 1000  # video time of mix time 0
             t["L"] = wav_len(t["mix"])
             t["amin"] = max(0.0, -t["o0"])
@@ -760,9 +934,7 @@ class App:
                 self.mode("trim")
                 self.draw_wave()
                 self.show_still(self.ph)
-                self.msg.config(text="Click the waveform to move the playhead, ▶ or Space to play. Pause where you "
-                                     "want and press Start here / End here (or drag the green and red markers). "
-                                     "Then ✓ Export." + note)
+                self.say("Click the wave to move, SPACE to play. MARK IN / MARK OUT (or drag the markers), then EXPORT." + note)
             self.ui(enter)
         except Exception as e:
             self.say(f"Error: {e}")
@@ -773,26 +945,32 @@ class App:
         return t / self.take["L"] * W
 
     def draw_wave(self):
-        c = self.wave
+        c, mid, amp = self.wave, WAVE_H / 2, WAVE_H / 2 - 3
         c.delete("all")
+        for s in range(0, int(self.take["L"]) + 1):  # a grid line per second
+            c.create_line(self.x(s), 0, self.x(s), WAVE_H, fill="#0f2a0f" if s % 5 else "#1d4d1d")
+        c.create_line(0, mid, W, mid, fill="#123012")
         for i, p in enumerate(self.take["peaks"]):  # absolute: full height = 0 dBFS, red = clipping
-            h = min(p, 1.0) * 33
-            c.create_line(i, 35 - h, i, 35 + h + 1, fill="#e53935" if p >= 0.99 else "#5c8dbc")
+            h = min(p, 1.0) * amp
+            hot = p >= 0.99
+            c.create_line(i, mid - h - 1, i, mid + h + 2, fill="#5a0010" if hot else "#2c5c00")
+            c.create_line(i, mid - h, i, mid + h + 1, fill=skin.HOT_HEX if hot else skin.ACID_HEX)
         self.draw_marks()
 
     def draw_marks(self):
         c, t = self.wave, self.take
         c.delete("m")
         for lo, hi in ((0, self.a), (self.b, t["L"])):
-            c.create_rectangle(self.x(lo), 0, self.x(hi), 70, fill="#000", stipple="gray50", width=0, tags="m")
-        c.create_line(self.x(self.a), 0, self.x(self.a), 70, fill="#4caf50", width=3, tags="m")
-        c.create_line(self.x(self.b), 0, self.x(self.b), 70, fill="#e53935", width=3, tags="m")
-        c.create_line(0, 0, 0, 70, fill="white", tags=("m", "ph"))
+            c.create_rectangle(self.x(lo), 0, self.x(hi), WAVE_H, fill="#000", stipple="gray50", width=0, tags="m")
+        for pos, color, label, anchor in ((self.a, skin.ACID_HEX, "IN", "nw"), (self.b, skin.PINK_HEX, "OUT", "ne")):
+            c.create_line(self.x(pos), 0, self.x(pos), WAVE_H, fill=color, width=k(3), tags="m")
+            c.create_text(self.x(pos) + (k(4) if anchor == "nw" else -k(4)), 1, text=label, fill=color, font=LCD(14), anchor=anchor, tags="m")
+        c.create_line(0, 0, 0, WAVE_H, fill="white", width=k(2), tags=("m", "ph"))
         self.move_ph()
 
     def move_ph(self):  # cheap enough to run on every video frame
-        self.wave.coords("ph", self.x(self.ph), 0, self.x(self.ph), 70)
-        self.trim_lbl.config(text=f"▸ {fmt(self.ph)}    clip {fmt(self.a)} – {fmt(self.b)} ({fmt(self.b - self.a)})")
+        self.wave.coords("ph", self.x(self.ph), 0, self.x(self.ph), WAVE_H)
+        self.c.itemconfig("trim_lbl", text=f"{fmt(self.ph)}  [{fmt(self.a)}-{fmt(self.b)}]")
 
     def near_mark(self, px):
         return self.take and "L" in self.take and min(abs(px - self.x(self.a)), abs(px - self.x(self.b))) <= 8
@@ -813,7 +991,7 @@ class App:
 
     def wave_release(self, e):
         if self.drag != "ph" and not self.playing:
-            self.ph = self.a if self.drag == "a" else self.b  # so ▶ starts right at the marker you moved
+            self.ph = self.a if self.drag == "a" else self.b  # so play starts right at the marker you moved
             self.draw_marks()
         if self.drag == "ph" and self.playing:
             self.play_at(self.ph)  # jump while playing
@@ -848,7 +1026,7 @@ class App:
         if start >= end - 0.3:
             start = self.a
         self.playing = run = object()  # identity token: a newer play_at/stop_play ends this one
-        self.b_play.config(text="⏸")
+        self.b_play.skin(self.b_play.render)
         self.snip_n ^= 1  # two files take turns, so a quick re-click never writes the one still being played
 
         def go(snip=os.path.join(TMP, f"play{self.snip_n}.wav")):
@@ -884,11 +1062,13 @@ class App:
             self.move_ph()
 
     def stop_play(self):
+        was = self.playing
         self.playing = None
         winsound.PlaySound(None, 0)
         if self.vid:
             self.vid.kill()
-        self.b_play.config(text="▶")
+        if was:
+            self.b_play.skin(self.b_play.render)
 
     def export(self):
         self.mode("busy")
@@ -896,7 +1076,7 @@ class App:
 
         def go():
             try:
-                self.say("Saving the video…")
+                self.say("Exporting...")
                 name = os.path.splitext(os.path.basename(t["raw"]))[0]
                 final = os.path.join(OUT, name + ".mp4")
                 ff("-ss", t["o0"] + a, "-i", t["raw"], "-ss", a, "-i", t["mix"], "-t", b - a,
@@ -909,8 +1089,8 @@ class App:
                 os.remove(t["mix"])
                 self.take = None
                 subprocess.Popen(["explorer", "/select,", final])
-                self.say(f"Saved: {os.path.basename(final)}\nReady for the next take.")
-                self.ui(lambda: self.mode("idle"))
+                self.say(f"Saved {os.path.basename(final)}. Ready for the next one.")
+                self.ui(lambda: (self.mode("idle"), self.achievement()))
             except Exception as e:
                 self.say(f"Error: {e}")
                 self.ui(lambda: self.mode("trim"))
@@ -928,6 +1108,8 @@ def selftest():
     assert abs(k - 9872 / 8000) < 1 / 8000 and s > 8, (k, s)
 
     assert video_encoder()[0] in ("h264_nvenc", "h264_amf", "h264_qsv", "libx264")
+    assert os.path.exists(os.path.join(BUNDLE, "riffcam.ico"))
+    assert skin.chrome_text(APP, 20).getbbox() and skin.button(80, 30, "OK").getbbox()  # fonts found, skin draws
 
     # render the template project over a custom time range
     os.makedirs(TMP, exist_ok=True)
@@ -951,6 +1133,7 @@ if __name__ == "__main__":
         os.makedirs(SONGS, exist_ok=True)
         selftest()
     else:
+        load_fonts()
         root = tk.Tk()
         App(root)
         root.mainloop()
