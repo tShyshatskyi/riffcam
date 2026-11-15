@@ -10,7 +10,7 @@ It is meant to replace REAPER inside RiffCam.
 
 ## Build
 
-Windows (Visual Studio 2022 with C++, git, CMake):
+Windows (Visual Studio 2022 or newer with C++, git, CMake):
 
 ```powershell
 .\build.ps1      # -> build\RiffEngine_artefacts\Release\RiffEngine.exe

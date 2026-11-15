@@ -174,7 +174,7 @@ void Chain::unloadPlugin()
     {
         const juce::ScopedLock sl (lock);
         std::swap (plugin, p);
-        pluginFile = {};
+        pluginFile = juce::File();
     }
     if (p)
         p->releaseResources();

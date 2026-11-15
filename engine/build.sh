@@ -5,4 +5,4 @@ set -euo pipefail
 cd "$(dirname "$0")"
 ./fetch_deps.sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release --parallel
+cmake --build build --config Release --parallel "$(getconf _NPROCESSORS_ONLN)"

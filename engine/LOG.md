@@ -74,3 +74,4 @@ Goal: prove we can replace REAPER's audio part ourselves: ASIO in/out with low l
   RiffCam log tails). Built-in NAM test model (BinaryData). Here: 37 s, all passed, Gojira 10-14 s load, 0 dropouts.
   Focusrite USB ASIO offers one buffer size (the one set in its control panel), so the 64 test reports "skipped".
 - Pushed to branch `riffengine` (Taras: push without asking). GPLv3 text in engine/LICENSE.
+- CI run 2: Windows failed – windows-latest has a newer Visual Studio and build.ps1/CI pinned 'Visual Studio 17 2022' (would break for users too) -> let CMake pick. macOS failed – clang rejects 'pluginFile = {}' (ambiguous), MSVC accepted it -> juce::File(). Mac build took 30 min: bare --parallel = 1 job with make -> pass the core count. build.ps1 found the wrong bash when run from Git Bash -> search upward for Gitinash.exe.
