@@ -79,3 +79,4 @@ Goal: prove we can replace REAPER's audio part ourselves: ASIO in/out with low l
   assumes no NaN, so the guard is optimised away (the risk noted earlier, now proven). Fix: no fast-math in our code;
   /fp:fast / -ffast-math only on NAM sources; LTO off (could inline NAM's assumptions into our code). Windows measured:
   fast-math everywhere 4.0x / 5.3x realtime (A1 std / A2), none 2.75x / 5.2x, NAM-only + no LTO 4.6-5.1x / 7.0x.
+- CI run 4: macOS + Windows all green. Mac: fat binary x86_64 arm64, self-test ALL PASSED, NAM 5.8x realtime. Packages checked: .command is 0755, Info.plist has the microphone text; Windows zip has exe + .bat (CRLF) + TESTING.md.

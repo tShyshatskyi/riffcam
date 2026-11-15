@@ -1,4 +1,4 @@
-# RiffEngine prototype – where we are (2026-11-16)
+# RiffEngine prototype – where we are (2026-11-15, late)
 
 Ready for Taras's play test: `engine\TESTING.md` (Ukrainian). Exe: `engine\build\RiffEngine_artefacts\Release\RiffEngine.exe`.
 Settings (`%APPDATA%\RiffCam\RiffEngine.settings`) preloaded with Focusrite ASIO 48k/128 + Gojira X.
@@ -12,7 +12,10 @@ Settings (`%APPDATA%\RiffCam\RiffEngine.settings`) preloaded with Focusrite ASIO
 
 ## 2026-11-16: hardening + macOS port done in code, Windows-verified (--selftest all pass)
 - Not yet verified: GUI guards by hand (crash guard, reconnect) – Taras's RiffEngine window was open.
-- macOS: not built yet – needs commit + push so GitHub Actions runs `.github/workflows/engine.yml` (asked Taras).
+- macOS: builds on GitHub Actions (branch `riffengine`), universal x86_64+arm64; self-test all passed, NAM 5.8x realtime.
+  Downloads: Actions run 43765914671 -> RiffEngine-macOS (zip with app + Test RiffEngine.command), RiffEngine-Windows.
+  Not yet run on a real Mac with an interface – needs a tester with a Mac.
+- Testers: `Test RiffEngine` launcher -> `--diagnose` report on the Desktop (37 s here, all passed).
 
 ## Next
 - Load plugins without freezing the window (background/async).
