@@ -450,6 +450,8 @@ PANEL = (8, 380, 528, 482)
 ROW = 522  # big buttons
 LCD_BOX = (8, 562, 528, 604)
 WAVE_H = k(50)
+WAVE_W, WAVE_X = W - k(28), k(14)  # trim waveform: narrower than the picture so the panel's screws stay visible
+MSG_LONG, MSG_MAX = 100, 124  # LCD line: longer messages get a smaller font, then get cut (2 lines either way)
 ACHIEVEMENTS = {1: "FIRST BLOOD", 5: "WARMED UP", 10: "ON FIRE", 25: "AXE MASTER", 50: "FRETBOARD LEGEND", 100: "ROCK GOD"}
 
 
@@ -500,17 +502,41 @@ class Slider:
     def __init__(self, c, x0, y, length, command):
         self.c, self.x0, self.y, self.len, self.command = c, x0, y, length, command
         self.to, self.value, self.on = 0.0, 0.0, True
+        self.shown, self.grabbed = True, False
         self.track = c.create_rectangle(x0, y - k(4), x0 + length, y + k(4), fill="#030603", outline="#000", width=k(2))
         self.fill = c.create_rectangle(x0, y - k(3), x0, y + k(3), fill=skin.ACID_HEX, outline="")
         self.knob_img = ImageTk.PhotoImage(skin.knob(k(16)))
         self.knob = c.create_image(x0, y, image=self.knob_img)
-        for item in (self.track, self.fill, self.knob):
-            c.tag_bind(item, "<ButtonPress-1>", self.drag)
-            c.tag_bind(item, "<B1-Motion>", self.drag)
+        # the canvas, not the items, takes the clicks: a strip taller than the 8 px track is easier to hit
+        c.bind("<ButtonPress-1>", self.press, add="+")
+        c.bind("<B1-Motion>", lambda e: self.grabbed and self.drag(e), add="+")
+        c.bind("<ButtonRelease-1>", lambda e: setattr(self, "grabbed", False), add="+")
+        c.bind("<MouseWheel>", lambda e: self.over(e) and self.nudge(0.5 if e.delta > 0 else -0.5), add="+")
+        c.bind("<Motion>", self.hover, add="+")
+        self.hovering = False
+
+    def hover(self, e):
+        over = bool(self.over(e))
+        if over != self.hovering:  # only on the edge: the buttons set the cursor for themselves
+            self.hovering = over
+            self.c.config(cursor="hand2" if over else "")
+
+    def over(self, e):
+        return (self.shown and self.on and self.to and self.x0 - k(10) <= e.x <= self.x0 + self.len + k(10)
+                and abs(e.y - self.y) <= k(13))
+
+    def press(self, e):
+        self.grabbed = bool(self.over(e))
+        if self.grabbed:
+            self.drag(e)
 
     def drag(self, e):
         if self.on and self.to:
             self.set((e.x - self.x0) / self.len * self.to)
+
+    def nudge(self, d):
+        if self.on and self.to:
+            self.set(self.value + d)
 
     def set(self, v):
         self.value = round(min(max(v, 0.0), self.to) * 2) / 2  # half-second steps
@@ -523,6 +549,7 @@ class Slider:
         return self.value
 
     def show(self, on):
+        self.shown = on
         for item in (self.track, self.fill, self.knob):
             self.c.itemconfig(item, state="normal" if on else "hidden")
 
@@ -576,17 +603,22 @@ class App:
         py = k(PANEL[1])
         self.b_link = btn(84, py + k(24), 124, 28, "PASTE LINK", command=self.paste_link, size=11)
         self.b_file = btn(206, py + k(24), 104, 28, "OPEN FILE", command=self.pick_file, size=11)
-        c.create_text(k(270), py + k(24), text="NO SONG: GUITAR ONLY", font=UI(9), fill="#e8ecef", anchor="w",
-                      width=k(250), tags=("song", "song_title"))
+        c.create_text(k(270), py + k(24), text="NO SONG: GUITAR ONLY", font=UI(9), fill="#9aa3ab", anchor="w",
+                      width=k(222), tags=("song", "song_title"))
+        # x after the title: back to guitar only
+        c.create_text(k(508), py + k(24), text="×", font=UI(15), fill="#9aa3ab", anchor="e", tags=("song", "song_x"))
+        c.tag_bind("song_x", "<Enter>", lambda e: (c.itemconfig("song_x", fill=skin.PINK_HEX), c.config(cursor="hand2")))
+        c.tag_bind("song_x", "<Leave>", lambda e: (c.itemconfig("song_x", fill="#9aa3ab"), c.config(cursor="")))
+        c.tag_bind("song_x", "<ButtonRelease-1>", lambda e: self.clear_song())
         c.create_text(k(24), py + k(68), text="START", font=UI(8), fill="#9aa3ab", anchor="w", tags="song")
-        self.pos = Slider(c, k(76), py + k(68), k(296), lambda v: c.itemconfig("pos_lbl", text=fmt(v)))
-        c.create_text(k(384), py + k(68), text="0:00.0", font=LCD(22), fill=skin.ACID_HEX, anchor="w", tags=("song", "pos_lbl"))
+        self.pos = Slider(c, k(72), py + k(68), k(276), lambda v: c.itemconfig("pos_lbl", text=fmt(v)))
+        c.create_text(k(360), py + k(68), text="0:00.0", font=LCD(22), fill="#3a4a2a", anchor="w", tags=("song", "pos_lbl"))
         self.b_listen = btn(488, py + k(68), 68, 28, "5S", command=self.listen, icon="play", size=11)
         self.song_widgets = (self.b_link, self.b_file, self.pos, self.b_listen)
 
         # trim panel: waveform with a playhead and in/out markers, plays the video with the sound
-        self.wave = tk.Canvas(root, width=W, height=WAVE_H, bg="#040904", highlightthickness=1, highlightbackground="#000")
-        c.create_window(px, py + k(10), window=self.wave, anchor="nw", tags="trim")
+        self.wave = tk.Canvas(root, width=WAVE_W, height=WAVE_H, bg="#040904", highlightthickness=1, highlightbackground="#000")
+        c.create_window(px + WAVE_X, py + k(10), window=self.wave, anchor="nw", tags="trim")
         self.wave.bind("<Button-1>", self.wave_press)
         self.wave.bind("<B1-Motion>", self.wave_move)
         self.wave.bind("<ButtonRelease-1>", self.wave_release)
@@ -598,7 +630,7 @@ class App:
         self.b_out = btn(228, ty, 98, 28, "MARK OUT", command=lambda: self.set_mark("b", self.ph), icon="out", size=10)
         c.create_text(k(286), ty, text="", font=LCD(18), fill=skin.ACID_HEX, anchor="w", tags=("trim", "trim_lbl"))
         self.trim_widgets = (self.b_play, self.b_in, self.b_out)
-        root.bind("<space>", lambda e: self.cur_mode == "trim" and self.toggle_play())
+        root.bind("<KeyPress>", self.key)
 
         # big buttons
         self.rec_render = lambda st: skin.orb(k(70), "REC", "red", st)
@@ -610,12 +642,28 @@ class App:
         self.keep = btn(180, row, 160, 46, "KEEP", "acid", self.process, icon="check", size=17)
         self.done = btn(180, row, 160, 46, "EXPORT", "acid", self.export, icon="check", size=17)
         self.drop = btn(356, row, 160, 46, "TRASH", "red", self.delete, icon="cross", size=17)
-        self.big = (self.rec, self.tone, self.gear, self.keep, self.done, self.drop)
+        self.again = btn(WIN_W // 2, row, 160, 46, "RETRY", "acid", self.retry, size=17)
+        self.big = (self.rec, self.tone, self.gear, self.keep, self.done, self.drop, self.again)
 
+        # count-in over the camera picture: time to get your hands on the guitar after clicking REC
+        cx, cy = px + W // 2, py0 + H // 2
+        self.count_bg = ImageTk.PhotoImage(skin.backdrop(k(300), k(190)))  # readable over any picture
+        c.create_image(cx, cy + k(14), image=self.count_bg, tags="count")
+        c.create_text(cx + k(4), cy + k(5), text="", font=LCD(120), fill="#000", tags=("count", "count_txt"))
+        c.create_text(cx, cy, text="", font=LCD(120), fill=skin.ACID_HEX, tags=("count", "count_txt", "count_top"))
+        c.create_text(cx, cy + k(78), text="CLICK REC OR PRESS ESC TO CANCEL", font=UI(9), fill="#e8ecef", tags="count")
+        c.itemconfig("count", state="hidden")
+        self.counting, self.count_job, self.still_job = False, None, None
+
+        # busy: a scanner bar where the big buttons were, so the empty row reads as "working", not "broken"
+        self.scan = c.create_text(k(WIN_W) // 2, row, text="", font=LCD(30), fill=skin.ACID_HEX, state="hidden")
+        self.scan_i = 0
+        self.msg_text, self.dots = "", 0
         self.msg = c.create_text(k(LCD_BOX[0] + 14), k(LCD_BOX[1] + LCD_BOX[3]) // 2, text="", font=LCD(16),
                                  fill=skin.ACID_HEX, anchor="w", width=k(LCD_BOX[2] - LCD_BOX[0] - 26))
         self.say("Booting REAPER...")
         self.mode("busy")
+        self.animate()
         threading.Thread(target=self.connect, daemon=True).start()
 
     # ---------- plumbing ----------
@@ -624,15 +672,89 @@ class App:
 
     def say(self, text):
         log(text)
-        self.ui(lambda: self.c.itemconfig(self.msg, text="> " + text.upper()))
+        self.ui(lambda: self.show_msg(text))
+
+    def show_msg(self, text):
+        text = "> " + text.upper()
+        if len(text) > MSG_MAX:
+            text = text[:MSG_MAX - 15].rstrip() + " (MORE IN LOG)"  # the whole message is in riffcam.log
+        self.msg_text, self.dots = text, 0
+        self.c.itemconfig(self.msg, text=text, font=LCD(13 if len(text) > MSG_LONG else 16))
+
+    def animate(self):
+        """Messages ending in '...' are work in progress: their dots run, so a long render doesn't look frozen."""
+        t, busy = self.msg_text, getattr(self, "cur_mode", "") == "busy"
+        self.frame_n = getattr(self, "frame_n", 0) + 1
+        if t.endswith("...") and (not busy or self.frame_n % 3 == 0):  # dots: ~3 steps a second either way
+            self.dots = (self.dots + 1) % 4
+            self.c.itemconfig(self.msg, text=t[:-3] + "." * self.dots + " " * (3 - self.dots))
+        if busy:
+            n, w = 16, 4  # a block of w bars running back and forth in n cells
+            self.scan_i = (self.scan_i + 1) % (2 * (n - w))
+            p = self.scan_i if self.scan_i <= n - w else 2 * (n - w) - self.scan_i
+            self.c.itemconfig(self.scan, text="[" + "-" * p + "=" * w + "-" * (n - w - p) + "]")
+        self.c.itemconfig(self.scan, state="normal" if busy else "hidden")
+        self.root.after(120 if busy else 350, self.animate)
+
+    def retry(self):
+        self.mode("busy")
+        self.say("Trying again...")
+        threading.Thread(target=self.connect, daemon=True).start()
+
+    def key(self, e):
+        """Keyboard: your hands are on the guitar, not on the mouse."""
+        if self.closing or not isinstance(e.widget, (tk.Tk, tk.Canvas)):  # not while typing in a dialog
+            return
+        ks, shift, ctrl = e.keysym.lower(), e.state & 1, e.state & 4
+        m = self.cur_mode
+        if self.counting:
+            if ks in ("escape", "space"):
+                self.cancel_count()
+        elif m == "idle":
+            if ks == "space" and self.rec.on:
+                self.toggle()
+            elif self.started or not self.b_link.on:  # recording, or a song is loading
+                return
+            elif ks in ("left", "right"):
+                self.pos.nudge((5 if shift else 0.5) * (1 if ks == "right" else -1))
+            elif ctrl and ks == "v":
+                self.paste_link()
+            elif ctrl and ks == "o":
+                self.pick_file()
+            elif ks == "p":
+                self.listen()
+        elif m == "stopped":
+            if ks == "return":
+                self.process()
+            elif ks == "delete":
+                self.delete()
+        elif m == "trim":
+            if ks == "space":
+                self.toggle_play()
+            elif ks == "i":
+                self.set_mark("a", self.ph)
+            elif ks == "o":
+                self.set_mark("b", self.ph)
+            elif ks in ("left", "right"):  # one video frame, or a second with Shift
+                self.seek(self.ph + (1 if shift else 1 / 25) * (1 if ks == "right" else -1))
+            elif ks == "home":
+                self.seek(self.a)
+            elif ks == "end":
+                self.seek(self.b)
+            elif ks == "return":
+                self.export()
+            elif ks == "delete":
+                self.delete()
+        elif m == "retry" and ks == "return":
+            self.retry()
 
     def mode(self, m):
-        """idle (song + record) / stopped (keep or bin) / trim (cut and export) / busy."""
+        """idle (song + record) / stopped (keep or bin) / trim (cut and export) / busy / retry (start failed)."""
         self.stop_play()
         self.cur_mode = m
         self.live = m != "trim"
         shown = {"idle": (self.rec, self.tone, self.gear), "stopped": (self.keep, self.drop),
-                 "trim": (self.done, self.drop), "busy": ()}[m]
+                 "trim": (self.done, self.drop), "busy": (), "retry": (self.again,)}[m]
         for b in self.big:
             b.show(b in shown)
             if b in shown:
@@ -644,6 +766,7 @@ class App:
             w.show(m == "trim")
         self.c.itemconfig("song", state="hidden" if m == "trim" else "normal")
         self.c.itemconfig("trim", state="normal" if m == "trim" else "hidden")
+        self.c.itemconfig("song_x", state="normal" if m == "idle" and self.song else "hidden")
 
     def show_score(self):
         self.c.itemconfig(self.score, text=f"{self.settings.get('gamerscore', 0)}G")
@@ -666,8 +789,11 @@ class App:
         self.root.after(4500, lambda: self.c.itemconfig(self.toast, state="hidden"))
 
     def connect(self):
+        global REAPER
+        REAPER = REAPER or installed("REAPER", "reaper.exe", r"C:\Program Files\REAPER (x64)\reaper.exe")
         if not REAPER:
-            self.say("RiffCam needs REAPER (reaper.fm). Install it, then start RiffCam again.")
+            self.say("RiffCam needs REAPER (reaper.fm). Install it, then hit RETRY.")
+            self.ui(lambda: self.mode("retry"))
             return
         if not os.path.exists(AMP):
             shutil.copy(os.path.join(BUNDLE, "template.rpp"), AMP)
@@ -675,7 +801,8 @@ class App:
             subprocess.Popen([REAPER, AMP])
         self.say("Waiting for REAPER to load your amp... (close its license popup if it shows)")
         if not reaper_ready():
-            self.say("REAPER isn't answering. Close any popup in REAPER (or restart it) and start RiffCam again.")
+            self.say("REAPER isn't answering. Close any popup in REAPER (or restart it), then hit RETRY.")
+            self.ui(lambda: self.mode("retry"))
             return
         self.ui(self.to_front)  # REAPER just opened or took the bridge script: come back on top
         self.configure(ask=False)
@@ -684,7 +811,8 @@ class App:
         """Pick camera + guitar input (asked when unknown, or when `ask`), then open the camera."""
         cams, mics = dshow_devices()
         if not cams or not mics:
-            self.say("No camera or no audio input found. Plug them in and start RiffCam again.")
+            self.say(f"No {'camera' if not cams else 'audio input'} found. Plug it in, then hit RETRY.")
+            self.ui(lambda: self.mode("retry"))
             return
         s = self.settings
         if ask or s.get("camera") not in cams or s.get("audio") not in mics:
@@ -692,7 +820,7 @@ class App:
             self.ui(lambda: self.setup_dialog([(n, n) for n in cams], [(n, n) for n in mics], done))
             done.wait()
         if self.start_camera():
-            self.say("Ready to shred. Paste a song link or open a file, set the start, hit REC.")
+            self.say("Ready to shred. PASTE LINK (Ctrl+V) or OPEN FILE, set the start, then REC or SPACE.")
         else:
             self.say("Couldn't open the camera (busy in another app?). Close that app or pick another camera in SETUP.")
         self.ui(lambda: self.mode("idle"))
@@ -728,23 +856,29 @@ class App:
             return lambda: ids[box.current()]
         cam = pick("CAMERA", cams, s.get("camera"))
         mic = pick("GUITAR INPUT  (the audio interface input your guitar is plugged into)", mics, s.get("audio"))
-        tk.Label(d, text="VIDEO DELAY, MS  (raise it if the picture lags the sound)", **lbl).pack(fill="x", pady=(10, 3))
-        lag = tk.Spinbox(d, from_=0, to=1000, increment=10, width=8, font=LCD(18), bg="#030603", fg=skin.ACID_HEX,
-                         buttonbackground="#2a2d31", insertbackground=skin.ACID_HEX, relief="flat")
-        lag.delete(0, "end")
-        lag.insert(0, s.get("video_lag_ms", 0))
-        lag.pack(anchor="w")
+        def number(label, lo, hi, step, value):
+            tk.Label(d, text=label, **lbl).pack(fill="x", pady=(10, 3))
+            box = tk.Spinbox(d, from_=lo, to=hi, increment=step, width=8, font=LCD(18), bg="#030603", fg=skin.ACID_HEX,
+                             buttonbackground="#2a2d31", insertbackground=skin.ACID_HEX, relief="flat")
+            box.delete(0, "end")
+            box.insert(0, value)
+            box.pack(anchor="w")
+
+            def get(default):
+                try:
+                    return min(max(int(float(box.get())), lo), hi)
+                except ValueError:
+                    return default
+            return get
+        lag = number("VIDEO DELAY, MS  (raise it if the picture lags the sound)", 0, 1000, 10, s.get("video_lag_ms", 0))
+        count = number("COUNT-IN, SECONDS  (time to grab the guitar after REC; 0 = none)", 0, 10, 1, s.get("count_in", 3))
         tk.Label(d, wraplength=k(470), **{**lbl, "fg": "#9aa3ab", "font": UI(9)}, text=(
             "\nIN REAPER (ONCE): Options > Preferences > Audio > Device: pick your interface's ASIO driver. "
             "Then on the armed track ('Guitar') choose your guitar's input and add your amp plugin with the FX "
             "button (or AMP here). RiffCam records whatever that track sounds like.")).pack(fill="x")
 
         def save():
-            try:
-                lag_ms = int(lag.get())
-            except ValueError:
-                lag_ms = 0
-            s.update(camera=cam(), audio=mic(), video_lag_ms=lag_ms)
+            s.update(camera=cam(), audio=mic(), video_lag_ms=lag(0), count_in=count(3))
             json.dump(s, open(SETTINGS, "w", encoding="utf-8"), indent=2)
             d.destroy()
             done.set()
@@ -753,7 +887,10 @@ class App:
         self.save_btn = Sprite(bc, k(90), k(33), lambda st: skin.button(k(150), k(42), "SAVE", "acid", st, k(16), "check"), save)
         self.save_btn.show(True)
         d.protocol("WM_DELETE_WINDOW", save)
+        d.bind("<Return>", lambda e: save())
+        d.bind("<Escape>", lambda e: save())
         d.grab_set()
+        d.focus_force()
 
     def to_front(self):
         self.root.deiconify()
@@ -833,7 +970,7 @@ class App:
         self.frame_busy = False
 
     def close(self):
-        self.closing = True
+        self.closing, self.counting = True, False
         self.stop_play()
         if self.started:
             reaper_lua(LUA_STOP.format(out=os.path.join(TMP, "take.txt")))  # the take stays in raw\
@@ -868,15 +1005,30 @@ class App:
 
                 def done():
                     self.song, self.song_len = wav, length
-                    self.c.itemconfig("song_title", text=f"{title[:42]}  ({fmt(length)})")
+                    short = title if len(title) <= 42 else title[:40].rstrip() + "..."
+                    self.c.itemconfig("song_title", text=f"{short}  ({fmt(length)})", fill="#e8ecef")
+                    self.c.itemconfig("pos_lbl", fill=skin.ACID_HEX)
+                    self.c.itemconfig("song_x", state="normal" if self.cur_mode == "idle" else "hidden")
                     self.pos.to = length
                     self.pos.set(0)
-                    self.say("Song loaded. Set the start (5S to preview it) and hit REC.")
+                    self.say("Song loaded. Drag START (or arrow keys), 5S to preview, then REC or SPACE.")
                 self.ui(done)
             except Exception as e:
                 self.say(f"Couldn't get the song: {why(e)}")
             self.ui(lambda: [w.enable(True) for w in self.song_widgets])
         threading.Thread(target=go, daemon=True).start()
+
+    def clear_song(self):
+        """The x next to the title: record the guitar alone again."""
+        if self.cur_mode != "idle" or self.started or self.counting or not self.b_link.on:
+            return
+        self.song, self.song_len, self.pos.to = None, 0.0, 0.0
+        self.pos.set(0)
+        self.c.itemconfig("song_title", text="NO SONG: GUITAR ONLY", fill="#9aa3ab")
+        self.c.itemconfig("pos_lbl", fill="#3a4a2a")
+        self.c.itemconfig("song_x", state="hidden")
+        self.c.config(cursor="")
+        self.say("No song: REC records the guitar alone.")
 
     def listen(self):
         if self.song:
@@ -890,16 +1042,45 @@ class App:
 
     # ---------- recording ----------
     def toggle(self):
+        if self.counting:
+            return self.cancel_count()
+        if self.started:
+            self.rec.enable(False)
+            threading.Thread(target=self.stop_take, daemon=True).start()
+            return
         if not running("reaper.exe"):
             self.say("REAPER is closed. Hit AMP to open it, then try again.")
             return
-        self.rec.enable(False)
-        if not self.started:
-            for w in (self.tone, self.gear, *self.song_widgets):
-                w.enable(False)
+        for w in (self.tone, self.gear, *self.song_widgets):
+            w.enable(False)
+        self.c.itemconfig("song_x", state="hidden")
+        self.counting = True
+        self.say("Get ready...")
+        self.count(int(self.settings.get("count_in", 3)))
+
+    def count(self, n):
+        """3, 2, 1 on the screen, then the take starts. The REC button stays live to cancel."""
+        if not self.counting:
+            return
+        if n <= 0:
+            self.counting = False
+            self.c.itemconfig("count", state="hidden")
+            self.rec.enable(False)
+            self.say("Starting...")
             threading.Thread(target=self.start_take, args=(self.song, self.pos.get()), daemon=True).start()
-        else:
-            threading.Thread(target=self.stop_take, daemon=True).start()
+            return
+        self.c.itemconfig("count_txt", text=str(n))
+        self.c.itemconfig("count_top", fill=skin.HOT_HEX if n == 1 else skin.ACID_HEX)
+        self.c.itemconfig("count", state="normal")
+        self.count_job = self.root.after(1000, lambda: self.count(n - 1))
+
+    def cancel_count(self):
+        self.counting = False
+        if self.count_job:
+            self.root.after_cancel(self.count_job)
+        self.c.itemconfig("count", state="hidden")
+        self.say("Cancelled. REC or SPACE when you're ready.")
+        self.mode("idle")
 
     def start_take(self, song, start):
         if not reaper_ready(20):  # REAPER restarted since? reload the bridge
@@ -925,7 +1106,7 @@ class App:
         # guess: rough offset if matching fails (or there is no guitar in the video to match)
         self.take = {"song": song, "start": start, "raw": raw, "guess": time.time() - self.cam_t0, "guitar": bool(mic)}
         self.started = time.time()
-        self.say("Recording. Give it everything." if mic else
+        self.say("Recording. Give it everything. (REC or SPACE stops)" if mic else
                  f"Recording without the guitar in the video ({self.cam_err}): sync will be approximate.")
 
         def recording():
@@ -954,7 +1135,7 @@ class App:
             fn, pos, length, offs, proj = open(info, encoding="utf-8", errors="replace").read().split("|")
             if fn:
                 self.take.update(fn=fn, pos=float(pos), len=float(length), offs=float(offs), proj=proj)
-                self.say("Keep this take or trash it?")
+                self.say("Keep this take (ENTER) or trash it (DEL)?")
                 self.ui(lambda: self.mode("stopped"))
                 return
         self.say("REAPER recorded nothing (is the guitar track armed?). The video stayed in raw\\.")
@@ -1006,14 +1187,14 @@ class App:
             t["L"] = wav_len(t["mix"])
             t["amin"] = max(0.0, -t["o0"])
             t["bmax"] = min(t["L"], vid_len - t["o0"])
-            t["peaks"] = peaks(t["mix"], W)
+            t["peaks"] = peaks(t["mix"], WAVE_W)
             self.a, self.b, self.ph = t["amin"], t["bmax"], t["amin"]
 
             def enter():
                 self.mode("trim")
                 self.draw_wave()
                 self.show_still(self.ph)
-                self.say("Click the wave to move, SPACE to play. MARK IN / MARK OUT (or drag the markers), then EXPORT." + note)
+                self.say("SPACE plays, arrows step, I / O mark in and out (or drag the markers), ENTER exports." + note)
             self.ui(enter)
         except Exception as e:
             self.say(f"Error: {why(e)}")
@@ -1021,14 +1202,14 @@ class App:
 
     # ---------- trim ----------
     def x(self, t):
-        return t / self.take["L"] * W
+        return t / self.take["L"] * WAVE_W
 
     def draw_wave(self):
         c, mid, amp = self.wave, WAVE_H / 2, WAVE_H / 2 - 3
         c.delete("all")
         for s in range(0, int(self.take["L"]) + 1):  # a grid line per second
             c.create_line(self.x(s), 0, self.x(s), WAVE_H, fill="#0f2a0f" if s % 5 else "#1d4d1d")
-        c.create_line(0, mid, W, mid, fill="#123012")
+        c.create_line(0, mid, WAVE_W, mid, fill="#123012")
         for i, p in enumerate(self.take["peaks"]):  # absolute: full height = 0 dBFS, red = clipping
             h = min(p, 1.0) * amp
             hot = p >= 0.99
@@ -1049,7 +1230,7 @@ class App:
 
     def move_ph(self):  # cheap enough to run on every video frame
         self.wave.coords("ph", self.x(self.ph), 0, self.x(self.ph), WAVE_H)
-        self.c.itemconfig("trim_lbl", text=f"{fmt(self.ph)}  [{fmt(self.a)}-{fmt(self.b)}]")
+        self.c.itemconfig("trim_lbl", text=f"{fmt(self.ph)}  CLIP {fmt(self.b - self.a)}")
 
     def near_mark(self, px):
         return self.take and "L" in self.take and min(abs(px - self.x(self.a)), abs(px - self.x(self.b))) <= 8
@@ -1061,7 +1242,7 @@ class App:
         self.wave_move(e)
 
     def wave_move(self, e):
-        t = min(max(e.x / W * self.take["L"], self.take["amin"]), self.take["bmax"])
+        t = min(max(e.x / WAVE_W * self.take["L"], self.take["amin"]), self.take["bmax"])
         if self.drag == "ph":
             self.ph = t
             self.move_ph()
@@ -1085,6 +1266,14 @@ class App:
         self.draw_marks()
         if still and not self.playing:
             self.show_still(self.a if which == "a" else self.b)
+
+    def seek(self, t):
+        """Move the playhead from the keyboard. The still frame follows once the key is let go (no ffmpeg per repeat)."""
+        self.ph = min(max(t, self.take["amin"]), self.take["bmax"])
+        self.move_ph()
+        if self.still_job:
+            self.root.after_cancel(self.still_job)
+        self.still_job = self.root.after(150, lambda: self.play_at(self.ph) if self.playing else self.show_still(self.ph))
 
     def show_still(self, tau):
         t = self.take

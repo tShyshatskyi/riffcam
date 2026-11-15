@@ -425,6 +425,17 @@ def static(w, h, text="NO SIGNAL"):
     return img
 
 
+def backdrop(w, h):
+    """Smoked-glass plate with an acid rim, for big text over the camera picture (the count-in)."""
+    pad = z(10)
+    img = Image.new("RGBA", (w + 2 * pad, h + 2 * pad))
+    shape = rrect_mask(img.width, img.height, z(22), (pad, pad, pad + w, pad + h))
+    img.alpha_composite(glow(shape, ACID, z(6), 0.7))
+    img.alpha_composite(solid(shape, (0, 0, 0, 175)))
+    ImageDraw.Draw(img).rounded_rectangle((pad, pad, pad + w, pad + h), z(22), outline=(*ACID, 120), width=z(2))
+    return img
+
+
 def starburst(r, text, color=(255, 230, 0), fg=(200, 0, 60)):
     """Web 2.0 sticker, radius r real pixels."""
     pad = max(10, r // 4)

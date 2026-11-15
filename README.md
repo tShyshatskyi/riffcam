@@ -68,6 +68,13 @@ Change the camera or input later with **SETUP**.
 - **Song levels:** the song plays on REAPER's **Backing** track. Set its fader and your guitar track's
   fader in REAPER; the video gets exactly that mix.
 - **Start a bit early.** Set *START* a few seconds before the part you want, and trim later.
+- **Count-in.** After **REC** the screen counts 3, 2, 1 so you can get your hands on the guitar
+  (change or turn it off in **SETUP**). Click **REC** again or press *Esc* to cancel.
+- **Keys** (hands on the guitar, not the mouse):
+  *Space* starts and stops recording, *← →* move *START* (*Shift* for 5 s), *Ctrl+V* pastes a link,
+  *P* previews 5 s. After a take: *Enter* keeps, *Del* trashes. Trimming: *Space* plays, *← →* step a frame
+  (*Shift* for a second), *I* / *O* mark in and out, *Home* / *End* jump to them, *Enter* exports.
+- **Guitar only.** The **×** next to the song title drops the song.
 - **Light up the room.** In dim light webcams stretch the exposure and drop to 15 to 20 fps; with
   decent light you get the full 30.
 - **Picture lags the sound?** Webcams are often a little late. Raise *Video delay* in **SETUP**
