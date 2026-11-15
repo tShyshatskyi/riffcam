@@ -95,3 +95,4 @@ Goal: prove we can replace REAPER's audio part ourselves: ASIO in/out with low l
 - GUI: "Amp" dropdown (4 built-ins + own .nam). First run without a plugin -> Crunch. UI Automation can't open JUCE
   popup menus or set a read-only ComboBox, so `--gui-test` drives the real MainComponent instead: 7/7 PASS.
 - Sent Taras 20 s MP3s of his take dry + through each amp (engine/out/amp-samples, not committed).
+- CI run 5: all green on both; --gui-test 7/7 on macOS too, same level-match numbers. Mac amps went to ~/Library/RiffCam -> moved to ~/Library/Application Support/RiffCam (Windows unchanged: %APPDATA%/RiffCam).

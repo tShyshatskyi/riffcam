@@ -8,7 +8,11 @@ namespace amps
 {
 inline juce::File folder()
 {
-    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("RiffCam").getChildFile ("amps");
+    auto base = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory);  // %APPDATA% / ~/Library
+   #if JUCE_MAC
+    base = base.getChildFile ("Application Support");  // where Mac apps keep their files
+   #endif
+    return base.getChildFile ("RiffCam").getChildFile ("amps");
 }
 
 inline juce::Array<juce::File> builtIn()   // clean, crunch, rock, metal
