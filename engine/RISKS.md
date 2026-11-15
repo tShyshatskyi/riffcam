@@ -20,3 +20,4 @@ Status: **fixed** = handled in code and checked (`--selftest` or measured); **in
 | 13 | macOS blocks the microphone/interface input without permission | Silence from the guitar | **in code**: the app asks for input access (Info.plist text) |
 | 14 | macOS Gatekeeper: app from the internet, not signed by Apple | "RiffEngine can't be opened" | **noted**: needs an Apple Developer ID ($99/year) + notarization; until then: right-click → Open |
 | 15 | Monitoring a microphone into speakers | Feedback howl | **noted**: rare for a DI guitar; the safety limiter caps the level |
+| 16 | "Fast math" compiler setting assumes NaN never happens | The broken-audio guard (#2) silently does nothing | **fixed**: caught by `--selftest` on macOS; fast math now only inside NAM's code, none in ours, no LTO (and NAM got faster: 4.0x -> 4.6-5.1x realtime) |

@@ -43,13 +43,19 @@ target_compile_definitions(RiffEngine PRIVATE
 option(RIFF_AVX2 "Build for AVX2 CPUs only (Windows/Intel)" OFF)
 
 if(MSVC)
-    target_compile_options(RiffEngine PRIVATE /utf-8 /bigobj $<$<CONFIG:Release>:/O2 /fp:fast>
+    # our code: no /fp:fast or -ffast-math – they let the compiler assume NaN never happens and drop the guard
+    # that mutes it (the macOS self-test caught exactly that). NAM's own math gets fast-math below.
+    target_compile_options(RiffEngine PRIVATE /utf-8 /bigobj $<$<CONFIG:Release>:/O2>
                            $<$<BOOL:${RIFF_AVX2}>:/arch:AVX2>
                            /Zi)  # symbols in release: tools/where_spins.py names our functions on a stuck stack
     target_link_options(RiffEngine PRIVATE /DEBUG /OPT:REF /OPT:ICF)
 else()
-    target_compile_options(RiffEngine PRIVATE $<$<CONFIG:Release>:-O3 -ffast-math>)
+    target_compile_options(RiffEngine PRIVATE $<$<CONFIG:Release>:-O3>)
 endif()
+
+# Fast math only inside NAM's neural-network code (~1.5x faster for typical models). Its "no NaN" assumption then
+# stays inside NAM: our guard checks the real bits it hands over. No LTO, which could inline NAM into our code.
+set_source_files_properties(${NAM_SOURCES} PROPERTIES COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/fp:fast,-ffast-math>")
 
 # a NAM model inside the app, so --selftest / --diagnose work on a machine with no models (MIT, from NAM core)
 juce_add_binary_data(RiffEngineData SOURCES ${NAM_DIR}/example_models/wavenet_a1_standard.nam)
@@ -59,8 +65,7 @@ target_link_libraries(RiffEngine PRIVATE
     juce::juce_audio_utils
     juce::juce_dsp
     PUBLIC
-    juce::juce_recommended_config_flags
-    juce::juce_recommended_lto_flags)
+    juce::juce_recommended_config_flags)
 
 # JUCE's own example host, to tell our bugs from JUCE's when a plugin misbehaves: cmake -DWITH_JUCE_HOST=ON
 option(WITH_JUCE_HOST "Also build JUCE's AudioPluginHost" OFF)

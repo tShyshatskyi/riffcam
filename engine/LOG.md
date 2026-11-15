@@ -74,4 +74,8 @@ Goal: prove we can replace REAPER's audio part ourselves: ASIO in/out with low l
   RiffCam log tails). Built-in NAM test model (BinaryData). Here: 37 s, all passed, Gojira 10-14 s load, 0 dropouts.
   Focusrite USB ASIO offers one buffer size (the one set in its control panel), so the 64 test reports "skipped".
 - Pushed to branch `riffengine` (Taras: push without asking). GPLv3 text in engine/LICENSE.
-- CI run 2: Windows failed – windows-latest has a newer Visual Studio and build.ps1/CI pinned 'Visual Studio 17 2022' (would break for users too) -> let CMake pick. macOS failed – clang rejects 'pluginFile = {}' (ambiguous), MSVC accepted it -> juce::File(). Mac build took 30 min: bare --parallel = 1 job with make -> pass the core count. build.ps1 found the wrong bash when run from Git Bash -> search upward for Gitinash.exe.
+- CI run 2: Windows failed – windows-latest has a newer Visual Studio and build.ps1/CI pinned 'Visual Studio 17 2022' (would break for users too) -> let CMake pick. macOS failed – clang rejects 'pluginFile = {}' (ambiguous), MSVC accepted it -> juce::File(). Mac build took 30 min: bare --parallel = 1 job with make -> pass the core count. build.ps1 found the wrong bash when run from Git Bash -> search upward for Git's bin/bash.exe.
+- CI run 3: macOS builds (universal). Self-test FAILED 'NaN from the chain is muted' on macOS only: clang -ffast-math
+  assumes no NaN, so the guard is optimised away (the risk noted earlier, now proven). Fix: no fast-math in our code;
+  /fp:fast / -ffast-math only on NAM sources; LTO off (could inline NAM's assumptions into our code). Windows measured:
+  fast-math everywhere 4.0x / 5.3x realtime (A1 std / A2), none 2.75x / 5.2x, NAM-only + no LTO 4.6-5.1x / 7.0x.
