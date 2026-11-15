@@ -80,3 +80,18 @@ Goal: prove we can replace REAPER's audio part ourselves: ASIO in/out with low l
   /fp:fast / -ffast-math only on NAM sources; LTO off (could inline NAM's assumptions into our code). Windows measured:
   fast-math everywhere 4.0x / 5.3x realtime (A1 std / A2), none 2.75x / 5.2x, NAM-only + no LTO 4.6-5.1x / 7.0x.
 - CI run 4: macOS + Windows all green. Mac: fat binary x86_64 arm64, self-test ALL PASSED, NAM 5.8x realtime. Packages checked: .command is 0755, Info.plist has the microphone text; Windows zip has exe + .bat (CRLF) + TESTING.md.
+
+## 2026-11-16 – built-in amps
+
+- The embedded "test model" (NAM example wavenet_a1_standard) has no metadata: NAM's tools make such files from
+  random weights. Not an amp. Replaced with 4 real captures (amp + miked cab, so no IR needed) from
+  pelennor2170/NAM_models (GPL-3.0, same as the engine): see amps/CREDITS.md. TONE3000 models can't be bundled
+  (T3K licence, API terms forbid redistribution); no cab IR with a verified licence + direct download was found.
+- These 2023 models carry no loudness: Chain::loadNam measures it (1 s of plucked low E at real DI level, ~-28 dB).
+  First calibration used a 10 dB too hot pluck: clean came out 5 dB louder and clipped 0.5 % of samples.
+  Now: target -20 dB RMS, capped to keep 12 dB headroom over the test pluck. Taras's take through the 4 amps:
+  -23.4 / -25.0 / -25.6 / -26.6 dB, 0 % clipped.
+- Taras's dry take peaks at 0.0 dBFS: his interface input gain is too hot (clipping before any software).
+- GUI: "Amp" dropdown (4 built-ins + own .nam). First run without a plugin -> Crunch. UI Automation can't open JUCE
+  popup menus or set a read-only ComboBox, so `--gui-test` drives the real MainComponent instead: 7/7 PASS.
+- Sent Taras 20 s MP3s of his take dry + through each amp (engine/out/amp-samples, not committed).

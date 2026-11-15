@@ -2,6 +2,7 @@
 //
 //   RiffEngine.exe                       the window: pick the interface, load an amp, play, record
 //   RiffEngine.exe --diagnose            runs every check below, saves one report on the Desktop (for testers)
+//   RiffEngine.exe --gui-test            drives the window's amp dropdown, PASS/FAIL (no audio device needed)
 //   RiffEngine.exe --list                audio drivers and devices
 //   RiffEngine.exe --selftest [--nam F]  checks the safety guards (RISKS.md) without a guitar or an interface
 //   RiffEngine.exe --render IN OUT [--nam F] [--ir F] [--vst3 F] [--block N]
@@ -10,7 +11,7 @@
 //                                        opens the interface and runs the amp live, reporting timing every second
 // Add --report FILE to any test to also write what it prints into FILE.
 #include "MainComponent.h"
-#include "BinaryData.h"
+#include "Amps.h"
 #include <cstdio>
 
 namespace
@@ -59,12 +60,9 @@ juce::PropertiesFile::Options settingsOptions()   // the GUI's settings file
     return o;
 }
 
-juce::File embeddedModel()   // a NAM model built into the app, so tests work on a machine with no models
+juce::File embeddedModel()   // the built-in Crunch amp: tests work on a machine with no models
 {
-    auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("RiffEngine-test-model.nam");
-    if (f.getSize() != BinaryData::wavenet_a1_standard_namSize)
-        f.replaceWithData (BinaryData::wavenet_a1_standard_nam, BinaryData::wavenet_a1_standard_namSize);
-    return f;
+    return amps::named ("crunch");
 }
 
 // --selftest [--nam MODEL]: the guards from RISKS.md that can be checked without a guitar or an interface.
@@ -186,7 +184,8 @@ int render (const juce::StringArray& a)
     if (auto err = loadStages (c, a); err.isNotEmpty())
         return say ("load failed: " + err), 1;
     if (c.namFile != juce::File())
-        say ("NAM: " + c.namFile.getFileName() + ", trained at " + juce::String (c.namRate, 0) + " Hz; file is " + juce::String (sr, 0) + " Hz");
+        say ("NAM: " + c.namFile.getFileName() + ", trained at " + juce::String (c.namRate, 0) + " Hz; file is " + juce::String (sr, 0)
+             + " Hz; level-match " + juce::String (c.levelMatchDb(), 1) + " dB");
     if (c.getPlugin())
         say ("VST3: " + c.getPlugin()->getName() + ", " + juce::String (c.getPlugin()->getTotalNumInputChannels()) + " in / "
              + juce::String (c.getPlugin()->getTotalNumOutputChannels()) + " out, reports "
@@ -291,6 +290,30 @@ public:
         auto a = juce::StringArray::fromTokens (commandLine, true);
         if (auto rf = arg (a, "--report"); rf.isNotEmpty())
             reportFile = juce::File (rf);
+        if (a.contains ("--gui-test"))  // the real window component, its own settings file, no audio device
+        {
+            juce::MessageManager::callAsync ([this]
+            {
+                auto o = settingsOptions();
+                o.filenameSuffix = ".gui-test.settings";
+                juce::PropertiesFile testProps (o);
+                Engine e;
+                int failed = 0;
+                {
+                    MainComponent ui (e, testProps);
+                    for (auto& l : ui.checkAmpBox())
+                    {
+                        say (l);
+                        failed += l.startsWith ("FAIL");
+                    }
+                }
+                testProps.getFile().deleteFile();
+                say (failed == 0 ? "ALL PASSED" : juce::String (failed) + " FAILED");
+                setApplicationReturnValue (failed == 0 ? 0 : 1);
+                quit();
+            });
+            return;
+        }
         if (a.contains ("--list") || a.contains ("--render") || a.contains ("--rt-test") || a.contains ("--describe") || a.contains ("--selftest") || a.contains ("--diagnose"))
         {
             // after the message loop is up: plugins expect one while they load, like inside any DAW
@@ -311,6 +334,8 @@ public:
         auto saved = props->getXmlValue ("devices");
         engine->open (saved.get());
         auto& c = engine->chain;
+        if (props->getValue ("nam").isEmpty() && props->getValue ("plugin").isEmpty())
+            props->setValue ("nam", amps::named ("crunch").getFullPathName());  // first run: an amp that works right away
         if (auto f = juce::File (props->getValue ("nam")); f.existsAsFile()) c.loadNam (f);
         if (auto f = juce::File (props->getValue ("ir")); f.existsAsFile()) c.loadIr (f);
         window = std::make_unique<Window> (*engine, *props);

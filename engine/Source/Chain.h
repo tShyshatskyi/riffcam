@@ -41,6 +41,7 @@ public:
     void unloadPlugin();
 
     juce::AudioPluginInstance* getPlugin() const { return plugin.get(); }
+    float levelMatchDb() const { return juce::Decibels::gainToDecibels (namLoudnessGain); }
     juce::File namFile, irFile, pluginFile;
     double namRate = 0;                                // sample rate the NAM model was trained at
     double sampleRate = 48000;

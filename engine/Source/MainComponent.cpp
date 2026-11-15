@@ -1,4 +1,5 @@
 #include "MainComponent.h"
+#include "Amps.h"
 
 static juce::File pluginFolder()
 {
@@ -72,9 +73,9 @@ MainComponent::MainComponent (Engine& e, juce::PropertiesFile& p)
     toggle (pluginOn, engine.chain.pluginOn, "pluginOn");
     toggle (normalize, engine.chain.normalize, "normalize");
 
-    for (auto* b : { &namBtn, &irBtn, &pluginBtn, &editorBtn, &unloadBtn, &recBtn, &loopBtn })
+    for (auto* b : { &irBtn, &pluginBtn, &editorBtn, &unloadBtn, &recBtn, &loopBtn })
         addAndMakeVisible (*b);
-    for (auto* l : { &namName, &irName, &pluginName, &info, &stats, &recLabel, &loopLabel, &warning })
+    for (auto* l : { &irName, &pluginName, &info, &stats, &recLabel, &loopLabel, &warning })
     {
         l->setColour (juce::Label::textColourId, DIM);
         addAndMakeVisible (*l);
@@ -84,13 +85,29 @@ MainComponent::MainComponent (Engine& e, juce::PropertiesFile& p)
     stats.setFont (juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), 13.0f, juce::Font::plain));
     recBtn.setColour (juce::TextButton::buttonColourId, HOT.darker (0.6f));
 
-    namBtn.onClick = [this] { choose ("NAM amp model", "*.nam", "nam", [this] (const juce::File& f)
+    // amp: the built-in captures (amps/CREDITS.md) or any .nam file
+    builtInAmps = amps::builtIn();
+    addAndMakeVisible (ampBox);
+    ampBox.setTextWhenNothingSelected ("Amp: none");
+    for (int i = 0; i < builtInAmps.size(); ++i)
+        ampBox.addItem (amps::label (builtInAmps[i]), i + 1);
+    ampBox.addSeparator();
+    ampBox.addItem ("Your own .nam file...", ownFileId);
+    ampBox.onChange = [this]
     {
-        auto err = engine.chain.loadNam (f);
-        if (err.isEmpty())
-            matchModelRate();
-        return err;
-    }); };
+        const int id = ampBox.getSelectedId();
+        if (id >= 1 && id <= builtInAmps.size())
+        {
+            if (auto err = loadAmp (builtInAmps[id - 1]); err.isNotEmpty())
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "RiffEngine", err);
+            updateNames();
+        }
+        else if (id == ownFileId)
+        {
+            updateNames();  // show the current amp again until a file is picked
+            choose ("NAM amp model", "*.nam", "nam", [this] (const juce::File& f) { return loadAmp (f); });
+        }
+    };
     irBtn.onClick = [this] { choose ("Cabinet impulse response", "*.wav", "ir", [this] (const juce::File& f) { return engine.chain.loadIr (f); }); };
     pluginBtn.onClick = [this]
     {
@@ -261,6 +278,39 @@ void MainComponent::closeEditor()
     pluginWindow = nullptr;  // the editor goes before the plugin it belongs to
 }
 
+juce::StringArray MainComponent::checkAmpBox()
+{
+    juce::StringArray out;
+    auto line = [&] (bool ok, const juce::String& what) { out.add ((ok ? "PASS " : "FAIL ") + what); };
+    line (builtInAmps.size() == 4, "4 built-in amps unpacked to " + amps::folder().getFullPathName());
+    for (int i = 0; i < builtInAmps.size(); ++i)
+    {
+        ampBox.setSelectedId (i + 1, juce::sendNotificationSync);   // what a click on the item does
+        line (engine.chain.namFile == builtInAmps[i] && ampBox.getText() == amps::label (builtInAmps[i]),
+              "dropdown loads '" + ampBox.getText() + "' (level-match " + juce::String (engine.chain.levelMatchDb(), 1) + " dB)");
+    }
+    auto own = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("my own amp.nam");
+    builtInAmps[0].copyFileTo (own);
+    const auto err = loadAmp (own);
+    updateNames();
+    line (err.isEmpty() && ampBox.getText() == "Amp: my own amp", "an own .nam file shows as '" + ampBox.getText() + "'");
+    ampBox.setSelectedId (2, juce::sendNotificationSync);
+    line (engine.chain.namFile == builtInAmps[1], "and switching back to a built-in amp works");
+    own.deleteFile();
+    return out;
+}
+
+juce::String MainComponent::loadAmp (const juce::File& f)
+{
+    auto err = engine.chain.loadNam (f);
+    if (err.isEmpty())
+    {
+        props.setValue ("nam", f.getFullPathName());
+        matchModelRate();
+    }
+    return err;
+}
+
 void MainComponent::matchModelRate()
 {
     auto* d = engine.devices.getCurrentAudioDevice();
@@ -275,7 +325,20 @@ void MainComponent::matchModelRate()
 void MainComponent::updateNames()
 {
     auto& c = engine.chain;
-    namName.setText (c.namFile.existsAsFile() ? c.namFile.getFileNameWithoutExtension() : "no model", juce::dontSendNotification);
+    const int builtIn = builtInAmps.indexOf (c.namFile);
+    if (builtIn >= 0)
+        ampBox.setSelectedId (builtIn + 1, juce::dontSendNotification);
+    else if (c.namFile.existsAsFile())
+    {
+        const auto name = "Amp: " + c.namFile.getFileNameWithoutExtension();
+        if (ampBox.indexOfItemId (customId) < 0)
+            ampBox.addItem (name, customId);
+        else
+            ampBox.changeItemText (customId, name);
+        ampBox.setSelectedId (customId, juce::dontSendNotification);
+    }
+    else
+        ampBox.setSelectedId (0, juce::dontSendNotification);
     irName.setText (c.irFile.existsAsFile() ? c.irFile.getFileNameWithoutExtension() : "no cab", juce::dontSendNotification);
     pluginName.setText (c.getPlugin() ? c.getPlugin()->getName() : "no plugin", juce::dontSendNotification);
     editorBtn.setEnabled (c.getPlugin() != nullptr);
@@ -389,7 +452,9 @@ void MainComponent::resized()
         on.setBounds (rr.removeFromLeft (50).withTrimmedLeft (8));
         name.setBounds (rr);
     };
-    slot (namBtn, namOn, namName);
+    r = row (28);
+    ampBox.setBounds (r.removeFromLeft (300));
+    namOn.setBounds (r.removeFromLeft (50).withTrimmedLeft (8));
     normalize.setBounds (row (20).withTrimmedLeft (150));
     slot (irBtn, irOn, irName);
     slot (pluginBtn, pluginOn, pluginName);

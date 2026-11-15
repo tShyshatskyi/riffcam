@@ -23,6 +23,7 @@ public:
     void saveState();
     void restorePlugin (const juce::File&, const juce::String& base64State);  // shows the window first: big plugins take a while
     void say (const juce::String& text) { pluginName.setText (text, juce::dontSendNotification); }
+    juce::StringArray checkAmpBox();  // --gui-test: drives the amp dropdown like a user, PASS/FAIL lines
     void doRestore (const juce::File&, const juce::String& base64State);
 
 private:
@@ -36,6 +37,7 @@ private:
     void closeEditor();
     void updateNames();
     void matchModelRate();
+    juce::String loadAmp (const juce::File&);  // load a NAM model, remember it, match the interface's rate
 
     Engine& engine;
     juce::PropertiesFile& props;
@@ -46,11 +48,14 @@ private:
     Meter inMeter, outMeter;
     juce::Slider inGain, outGain;
 
-    juce::TextButton namBtn { "Load NAM model..." }, irBtn { "Load cab IR..." }, pluginBtn { "Load plugin..." },
+    juce::ComboBox ampBox;
+    juce::Array<juce::File> builtInAmps;
+    static constexpr int ownFileId = 100, customId = 200;
+    juce::TextButton irBtn { "Load cab IR..." }, pluginBtn { "Load plugin..." },
                      editorBtn { "Plugin window" }, unloadBtn { "Remove" }, recBtn { "Record" },
                      loopBtn { "Measure latency (cable)" };
     juce::ToggleButton namOn { "on" }, irOn { "on" }, pluginOn { "on" }, normalize { "level-match" };
-    juce::Label namName, irName, pluginName, info, stats, recLabel, loopLabel, warning;
+    juce::Label irName, pluginName, info, stats, recLabel, loopLabel, warning;
 
     std::unique_ptr<juce::FileChooser> chooser;
     std::unique_ptr<juce::DocumentWindow> pluginWindow;

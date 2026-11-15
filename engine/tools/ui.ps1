@@ -1,9 +1,9 @@
 # Drives RiffEngine's window through Windows UI Automation (JUCE exposes its controls), no mouse or screen capture.
 #   ui.ps1 list                      all named controls
 #   ui.ps1 click "<name>" [index]    press a button / flip a toggle (index picks among same-named ones, 0-based)
-param([string]$cmd, [string]$name, [int]$index = 0)
+param([string]$cmd, [string]$name, [int]$index = 0, [int]$procId = 0)  # -procId: which RiffEngine, if several run
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
-$p = Get-Process RiffEngine | Select-Object -First 1
+$p = if ($procId) { Get-Process -Id $procId } else { Get-Process RiffEngine | Select-Object -First 1 }
 $c = New-Object Windows.Automation.AndCondition (
     (New-Object Windows.Automation.PropertyCondition ([Windows.Automation.AutomationElement]::ProcessIdProperty, $p.Id)),
     (New-Object Windows.Automation.PropertyCondition ([Windows.Automation.AutomationElement]::NameProperty, "RiffEngine")))

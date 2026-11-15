@@ -57,8 +57,9 @@ endif()
 # stays inside NAM: our guard checks the real bits it hands over. No LTO, which could inline NAM into our code.
 set_source_files_properties(${NAM_SOURCES} PROPERTIES COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/fp:fast,-ffast-math>")
 
-# a NAM model inside the app, so --selftest / --diagnose work on a machine with no models (MIT, from NAM core)
-juce_add_binary_data(RiffEngineData SOURCES ${NAM_DIR}/example_models/wavenet_a1_standard.nam)
+# built-in amps (amps/CREDITS.md, GPL-3.0): a sound right away, and --selftest / --diagnose need no files
+file(GLOB AMP_FILES ${CMAKE_CURRENT_SOURCE_DIR}/amps/*.nam)
+juce_add_binary_data(RiffEngineData SOURCES ${AMP_FILES})
 
 target_link_libraries(RiffEngine PRIVATE
     RiffEngineData

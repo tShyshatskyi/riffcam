@@ -42,7 +42,10 @@ jobs:
         run: lipo -info "$EXE"
 
       - name: Self-test (safety guards, Cyrillic paths, NAM speed)
-        run: '"$EXE" --selftest --nam deps/NAM/example_models/wavenet_a1_standard.nam'
+        run: '"$EXE" --selftest'   # uses the built-in Crunch amp
+
+      - name: Window test (amp dropdown, built-in amps)
+        run: '"$EXE" --gui-test'
 
       - name: Render a test signal through a NAM amp
         run: |
@@ -54,7 +57,7 @@ jobs:
               w.writeframes(b"".join(struct.pack("<h", int(12000 * math.exp(-3 * (i % sr) / sr) * math.sin(2 * math.pi * 82.4 * i / sr)))
                                      for i in range(sr * 5)))
           PY
-          "$EXE" --render pluck.wav out.wav --nam deps/NAM/example_models/A2.nam --block 128
+          "$EXE" --render pluck.wav out.wav --nam amps/metal-bugera-6262.nam --block 128
           test -s out.wav
 
       - name: Package (app + "Test RiffEngine" file for testers)

@@ -4,6 +4,8 @@ RiffCam's own audio engine (prototype): plays your guitar through an amp – a N
 VST3 / Audio Unit plugin – into your headphones with low latency, and records the dry and the amped guitar.
 It is meant to replace REAPER inside RiffCam.
 
+- **Built-in amps:** Clean, Crunch, Rock, Metal – NAM captures of real amps with their cabinets
+  ([credits](amps/CREDITS.md), GPL-3.0), so it plays right away with no files or plugins.
 - **Windows:** ASIO (or Windows Audio). **macOS 11+:** CoreAudio, universal app (Apple Silicon + Intel).
 - What can go wrong and what guards against it: [RISKS.md](RISKS.md). How to try it: [TESTING.md](TESTING.md).
 - Work log: [LOG.md](LOG.md), where we are: [PROGRESS.md](PROGRESS.md).

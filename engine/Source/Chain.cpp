@@ -105,9 +105,46 @@ juce::String Chain::loadNam (const juce::File& f)
     if (m->NumInputChannels() != 1 || m->NumOutputChannels() != 1)
         return "This NAM model isn't mono in / mono out.";
 
-    m->Reset (sampleRate, juce::jmax (maxBlock, 32));  // prewarms: no click when it goes live
-    // NAM's own plugin levels models to -18 dB loudness, so models of quiet and loud amps sound equally loud
-    const float g = m->HasLoudness() ? (float) juce::Decibels::decibelsToGain (-18.0 - m->GetLoudness()) : 1.0f;
+    const int block = juce::jmax (maxBlock, 32);
+    m->Reset (sampleRate, block);  // prewarms: no click when it goes live
+    // NAM's own plugin levels models to -18 dB loudness, so models of quiet and loud amps sound equally loud.
+    // Older models (2023) don't carry their loudness: measure it with a second of plucked strings instead.
+    float g = 1.0f;
+    if (m->HasLoudness())
+        g = (float) juce::Decibels::decibelsToGain (-18.0 - m->GetLoudness());
+    else
+    {
+        const int n = (int) sampleRate;
+        std::vector<float> in ((size_t) n), out ((size_t) n);
+        for (int i = 0; i < n; ++i)  // low E, re-plucked 4 times, ~-28 dB average like real DI playing
+        {
+            const double t = i / sampleRate, tp = std::fmod (t, 0.25);
+            in[(size_t) i] = (float) (0.1 * std::exp (-6.0 * tp) * (std::sin (2 * juce::MathConstants<double>::pi * 82.4 * t)
+                                                                  + 0.5 * std::sin (2 * juce::MathConstants<double>::pi * 164.8 * t)));
+        }
+        for (int p = 0; p < n; p += block)
+        {
+            float* src[] = { in.data() + p };
+            float* dst[] = { out.data() + p };
+            m->process (src, dst, juce::jmin (block, n - p));
+        }
+        double sum = 0, peak = 0;
+        for (auto v : out)
+            if (isFiniteSample (v))
+            {
+                sum += (double) v * v;
+                peak = juce::jmax (peak, (double) std::abs (v));
+            }
+        const double rmsDb = juce::Decibels::gainToDecibels (std::sqrt (sum / n), -100.0);
+        if (rmsDb > -90)
+        {
+            // loudness like NAM's -18 dB, but keep 12 dB of headroom above the test pluck: clean amps follow the
+            // pick, and harder playing must not run into the output limiter
+            const double byLoudness = -20.0 - rmsDb, byHeadroom = -12.0 - juce::Decibels::gainToDecibels (peak, -100.0);
+            g = (float) juce::Decibels::decibelsToGain (juce::jmin (byLoudness, byHeadroom));
+        }
+        m->Reset (sampleRate, block);  // forget the test signal
+    }
     const double rate = m->GetExpectedSampleRate();
     {
         const juce::ScopedLock sl (lock);
