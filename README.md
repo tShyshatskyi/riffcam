@@ -81,6 +81,12 @@ Change the camera or input later with **SETUP**.
   REAPER. Close it and hit REC again. Also check that a track is armed.
 - **"Couldn't open the camera"**: another app (Zoom, Teams, OBS, the Camera app) is using it. Close
   that app; the webcam can only be used by one program at a time.
+- **"Sync will be approximate" right after REC**: your interface's ASIO driver won't share the guitar
+  input while REAPER uses it, so the camera films the picture alone and RiffCam lines it up by timing.
+  If your interface has a second input (or a WDM/"multi-client" option in its control panel), pick that in
+  **SETUP**.
+- **Something else broke?** Double-click `selftest.bat` (next to `RiffCam.exe`) with REAPER open and send
+  the `selftest.txt` it opens, plus `riffcam.log` and `camera.log` from `%APPDATA%\RiffCam`.
 - **A YouTube link stops working**: YouTube changes often. Grab the latest RiffCam release (it ships a
   newer yt-dlp), or use **OPEN FILE**.
 - **Settings and the REAPER project** live in `%APPDATA%\RiffCam`. Delete `settings.json` to run setup

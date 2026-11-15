@@ -42,7 +42,8 @@ DATA = os.path.join(os.environ["APPDATA"], APP)
 AMP = os.path.join(DATA, "amp.rpp")  # the live REAPER project: your amp plugin lives on its armed track
 SONGS, TMP = os.path.join(DATA, "songs"), os.path.join(DATA, "tmp")
 SETTINGS = os.path.join(DATA, "settings.json")
-OUT = os.path.join(os.environ["USERPROFILE"], "Videos", APP)
+LOG, CAMLOG = os.path.join(DATA, "riffcam.log"), os.path.join(DATA, "camera.log")  # testers send these
+OUT =os.path.join(os.environ["USERPROFILE"], "Videos", APP)
 RAW = os.path.join(OUT, "raw")
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
 DENO = os.path.join(BUNDLE, "deno.exe")  # JS runtime yt-dlp needs for YouTube; on PATH when run from source
@@ -126,7 +127,7 @@ put([[{out}]], info)
 def dshow_devices():
     """Cameras and audio inputs DirectShow can see: ([names], [names])."""
     out = subprocess.run([FFMPEG, "-hide_banner", "-f", "dshow", "-list_devices", "true", "-i", "dummy"],
-                         capture_output=True, text=True, errors="replace", creationflags=NOWIN).stderr
+                         capture_output=True, encoding="utf-8", errors="replace", creationflags=NOWIN).stderr
     found = re.findall(r'"([^"]+)" \((video|audio)\)', out)
     return [n for n, kind in found if kind == "video"], [n for n, kind in found if kind == "audio"]
 
@@ -147,20 +148,60 @@ def best_mode(listing):
 @functools.cache
 def camera_mode(name):
     return best_mode(subprocess.run([FFMPEG, "-hide_banner", "-f", "dshow", "-list_options", "true", "-i", f"video={name}"],
-                                    capture_output=True, text=True, errors="replace", creationflags=NOWIN).stderr)
+                                    capture_output=True, encoding="utf-8", errors="replace", creationflags=NOWIN).stderr)
 
 
-def camera_cmd(cam, mic, out=None):
+def camera_cmd(cam, mic, out=None, enc=None):
     """ffmpeg on the camera, always feeding the preview pipe; with `out` it also records the camera plus the guitar
-    input into that file. One DirectShow graph stamps both, so picture and guitar share one clock."""
+    input `mic` (None = picture only) into that file with encoder args `enc`. One DirectShow graph stamps both,
+    so picture and guitar share one clock."""
+    mic = mic if out else None
     cmd = [FFMPEG, "-hide_banner", "-nostats", "-loglevel", "error", "-f", "dshow", "-rtbufsize", "512M",
-           "-audio_buffer_size", "50", *camera_mode(cam), "-i", f"video={cam}" + (f":audio={mic}" if out else "")]
+           "-audio_buffer_size", "50", *camera_mode(cam), "-i", f"video={cam}" + (f":audio={mic}" if mic else "")]
     preview = ["-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"]
     if not out:
         return cmd + ["-vf", f"scale={W}:{H},fps=25", *preview]
+    audio = ["-map", "0:a", "-c:a", "pcm_s16le"] if mic else []
     return cmd + ["-filter_complex", f"[0:v]split[rec][pv];[pv]scale={W}:{H},fps=25[pvo]",
-                  "-map", "[rec]", "-map", "0:a", "-c:v", *video_encoder(realtime=True), "-c:a", "pcm_s16le", "-y", out,
+                  "-map", "[rec]", "-c:v", *(enc or video_encoder(realtime=True)), *audio, "-y", out,
                   "-map", "[pvo]", *preview]
+
+
+def record_attempts(mic):
+    """What to try, in order, when REC opens the camera: (guitar input or None, encoder args).
+    Hardware encoders can pass the quick probe and still refuse the real camera; some interfaces' ASIO drivers
+    lock the input while REAPER holds it, so the last resort films the picture alone (sync by timing)."""
+    hw = video_encoder(realtime=True)
+    return [(mic, hw)] + ([(mic, CPU_RT)] if hw != CPU_RT else []) + [(None, CPU_RT)]
+
+
+def log(text):
+    try:
+        with open(LOG, "a", encoding="utf-8") as f:
+            f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + text + "\n")
+    except OSError:
+        pass
+
+
+def first_error(text):
+    """ffmpeg's first error line is the cause; the last one is a generic "Error opening input files"."""
+    lines = (text or "").strip().splitlines()
+    return re.sub(r"^\[[^]]*@ \w+\] ", "", lines[0]) if lines else ""
+
+
+def why(e):
+    """Readable reason for an exception: ffmpeg's own error rather than its whole command."""
+    err = getattr(e, "stderr", None)
+    return first_error(err.decode(errors="replace") if isinstance(err, bytes) else err) or str(e)
+
+
+def log_error(path, start=0):
+    try:
+        with open(path, "rb") as f:
+            f.seek(start)
+            return first_error(f.read().decode(errors="replace"))
+    except OSError:
+        return ""
 
 
 def load_settings():
@@ -171,7 +212,7 @@ def load_settings():
 
 
 def ff(*args):
-    subprocess.run([FFMPEG, "-y", "-loglevel", "error", *map(str, args)], check=True, creationflags=NOWIN)
+    subprocess.run([FFMPEG, "-y", "-loglevel", "error", *map(str, args)], check=True, capture_output=True, creationflags=NOWIN)
 
 
 def running(exe):
@@ -355,6 +396,9 @@ def peaks(path, cols):
     return [float(c.max()) if len(c) else 0.0 for c in np.array_split(a, cols)]
 
 
+CPU_RT = ["libx264", "-preset", "ultrafast", "-crf", "18"]
+
+
 @functools.cache
 def video_encoder(realtime=False):
     """First hardware H.264 encoder that works on this PC (NVIDIA, AMD, Intel), else x264 on the CPU.
@@ -364,7 +408,7 @@ def video_encoder(realtime=False):
                                "-c:v", enc, "-f", "null", "-"], creationflags=NOWIN)
         if test.returncode == 0:
             return [enc, "-b:v", "12M" if realtime else "8M"]
-    return ["libx264", "-preset", "ultrafast" if realtime else "veryfast", "-crf", "18" if realtime else "20"]
+    return CPU_RT if realtime else ["libx264", "-preset", "veryfast", "-crf", "20"]
 
 
 def wait_file_done(path):
@@ -492,7 +536,7 @@ class App:
         self.root, self.started, self.live = root, 0, True
         self.song, self.song_len, self.take = None, 0.0, None
         self.playing, self.vid, self.frame_busy, self.snip_n = None, None, False, 0
-        self.closing, self.cam = False, None
+        self.closing, self.cam, self.cam_err, self.cam_t0 = False, None, "", 0.0
         self.settings = load_settings()
         root.title(APP)
         root.resizable(False, False)
@@ -579,6 +623,7 @@ class App:
         self.root.after(0, fn)
 
     def say(self, text):
+        log(text)
         self.ui(lambda: self.c.itemconfig(self.msg, text="> " + text.upper()))
 
     def mode(self, m):
@@ -721,28 +766,54 @@ class App:
         threading.Thread(target=self.configure, args=(True,), daemon=True).start()
 
     def start_camera(self, out=None):
-        """(Re)open the camera: preview only, or preview + recording to `out`. True once frames arrive."""
-        self.stop_camera()
+        """(Re)open the camera: preview only, or preview + recording to `out`, trying record_attempts() in turn.
+        Returns False on failure; else True for preview, or the guitar input being recorded (None = picture only)."""
         s = self.settings
-        proc = self.cam = subprocess.Popen(camera_cmd(s["camera"], s["audio"], out), stdin=subprocess.PIPE,
-                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=NOWIN)
-        first = threading.Event()
+        for mic, enc in record_attempts(s["audio"]) if out else [(None, None)]:
+            if self.open_camera(camera_cmd(s["camera"], mic, out, enc), out):
+                return mic if out else True
+            log(f"camera failed ({'preview' if not out else (enc[0] + (' + ' + mic if mic else ' picture only'))}): "
+                f"{self.cam_err}")
+        return False
+
+    def open_camera(self, cmd, recording):
+        """True once frames arrive and ffmpeg is still running a second later (an encoder can fail after the first
+        preview frame). ffmpeg's errors go to camera.log: an unread pipe fills up and freezes ffmpeg."""
+        self.stop_camera()
+        os.makedirs(DATA, exist_ok=True)
+        with open(CAMLOG, "ab") as errlog:
+            errlog.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} {subprocess.list2cmdline(cmd[1:])}\n".encode())
+            start = errlog.tell()
+            proc = self.cam = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errlog,
+                                               creationflags=NOWIN)
+        first, got = threading.Event(), []
 
         def feed():
             size, head = W * H * 3, f"P6 {W} {H} 255\n".encode()
             while len(buf := proc.stdout.read(size)) == size:
-                first.set()
+                if not got:
+                    got.append(time.time())  # video time 0
+                    first.set()
                 if self.live and not self.frame_busy:  # drop frames instead of piling them up if Tk is behind
                     self.frame_busy = True
                     self.ui(lambda d=head + buf: self.show_frame(d))
             first.set()
-            if self.cam is proc and not self.closing:  # it died on its own
-                err = proc.stderr.read().decode(errors="replace").strip().splitlines()
-                self.say("Camera stopped: " + (err[-1] if err else "no picture") + ". Check SETUP.")
+            proc.wait()
+            self.cam_err = log_error(CAMLOG, start) or "no picture"
+            if self.cam is proc and not self.closing and got:  # it died on its own, after working
+                self.say(f"Camera stopped: {self.cam_err}. Check SETUP.")
                 self.ui(lambda: self.c.itemconfig(self.view, image=self.blank))
         threading.Thread(target=feed, daemon=True).start()
         first.wait(20)
-        return proc.poll() is None
+        try:
+            proc.wait(1 if recording else 0.1)  # still running = good
+        except subprocess.TimeoutExpired:
+            if got:
+                self.cam_t0 = got[0]
+                return True
+        self.stop_camera()
+        time.sleep(0.5)  # let feed() note the error and Windows release the camera before the next attempt
+        return False
 
     def stop_camera(self):
         """Stop ffmpeg the polite way ('q'), so a recording gets a proper ending."""
@@ -803,7 +874,7 @@ class App:
                     self.say("Song loaded. Set the start (5S to preview it) and hit REC.")
                 self.ui(done)
             except Exception as e:
-                self.say(f"Couldn't get the song: {e}")
+                self.say(f"Couldn't get the song: {why(e)}")
             self.ui(lambda: [w.enable(True) for w in self.song_widgets])
         threading.Thread(target=go, daemon=True).start()
 
@@ -837,12 +908,12 @@ class App:
             return
         ok = fresh(os.path.join(TMP, "rec.ok"))
         raw = os.path.join(RAW, time.strftime("%Y-%m-%d %H-%M-%S") + ".mkv")
-        if not self.start_camera(raw):  # camera first: the video must cover the whole REAPER take
-            self.say("Couldn't start recording the camera and the guitar input. Check SETUP.")
+        mic = self.start_camera(raw)  # camera first: the video must cover the whole REAPER take
+        if mic is False:
+            self.say(f"Couldn't start recording the camera: {self.cam_err}. Check SETUP.")
             self.start_camera()
             self.ui(lambda: self.mode("idle"))
             return
-        t_cam = time.time()
         reaper_lua(LUA_RECORD.format(song=song or "", start=start, ok=ok))
         if not wait_for(ok, 8):
             self.start_camera()  # back to preview only; the empty recording goes away
@@ -851,9 +922,11 @@ class App:
                      "check a track is armed, and try again.")
             self.ui(lambda: self.mode("idle"))
             return
-        self.take = {"song": song, "start": start, "raw": raw, "guess": time.time() - t_cam}  # rough offset if matching fails
+        # guess: rough offset if matching fails (or there is no guitar in the video to match)
+        self.take = {"song": song, "start": start, "raw": raw, "guess": time.time() - self.cam_t0, "guitar": bool(mic)}
         self.started = time.time()
-        self.say("Recording. Give it everything.")
+        self.say("Recording. Give it everything." if mic else
+                 f"Recording without the guitar in the video ({self.cam_err}): sync will be approximate.")
 
         def recording():
             self.rec.skin(self.stop_render)
@@ -919,15 +992,20 @@ class App:
             render(t["proj"], t["pos"], t["pos"] + t["len"], t["mix"])  # mix time 0 = take start
             self.ui(self.to_front)
             self.say("Syncing video to audio...")
-            cam_a = mono8k(t["raw"])
-            k, strength = t["k"], t["strength"] = find_offset(cam_a, mono8k(t["fn"]))
-            note = ""
-            if strength < 8:  # nothing to match on (e.g. no playing at all): fall back to the timing guess
-                k, note = t["guess"], " (Couldn't hear the guitar in the video, sync is approximate.)"
+            try:
+                vid_len = imageio_ffmpeg.count_frames_and_secs(t["raw"])[1]
+            except Exception:
+                raise RuntimeError("the camera recording is missing or broken (the camera stopped during the take?)")
+            k, strength, note = t["guess"], 0, " (No guitar in the video to match, sync is approximate.)"
+            if t["guitar"]:
+                k, strength = t["k"], t["strength"] = find_offset(mono8k(t["raw"]), mono8k(t["fn"]))
+                note = ""
+                if strength < 8:  # nothing to match on (e.g. no playing at all): fall back to the timing guess
+                    k, note = t["guess"], " (Couldn't hear the guitar in the video, sync is approximate.)"
             t["o0"] = k + t["offs"] + self.settings.get("video_lag_ms", 0) / 1000  # video time of mix time 0
             t["L"] = wav_len(t["mix"])
             t["amin"] = max(0.0, -t["o0"])
-            t["bmax"] = min(t["L"], len(cam_a) / 8000 - t["o0"])
+            t["bmax"] = min(t["L"], vid_len - t["o0"])
             t["peaks"] = peaks(t["mix"], W)
             self.a, self.b, self.ph = t["amin"], t["bmax"], t["amin"]
 
@@ -938,7 +1016,7 @@ class App:
                 self.say("Click the wave to move, SPACE to play. MARK IN / MARK OUT (or drag the markers), then EXPORT." + note)
             self.ui(enter)
         except Exception as e:
-            self.say(f"Error: {e}")
+            self.say(f"Error: {why(e)}")
             self.ui(lambda: self.mode("stopped"))
 
     # ---------- trim ----------
@@ -1093,7 +1171,7 @@ class App:
                 self.say(f"Saved {os.path.basename(final)}. Ready for the next one.")
                 self.ui(lambda: (self.mode("idle"), self.achievement()))
             except Exception as e:
-                self.say(f"Error: {e}")
+                self.say(f"Error: {why(e)}")
                 self.ui(lambda: self.mode("trim"))
         threading.Thread(target=go, daemon=True).start()
 
@@ -1131,15 +1209,63 @@ def selftest():
     if "--online" in sys.argv:  # YouTube download through the bundled JS runtime
         title, wav = fetch_song("https://www.youtube.com/watch?v=jNQXAC9IVRw")
         result += f", download ok: {title!r} {wav_len(wav):.1f} s"
-    open(os.path.join(TMP, "selftest.txt"), "w", encoding="utf-8").write(result)  # the .exe has no console
+    return result
+
+
+def camera_check(cam, mic, secs=4):
+    """Record `secs` with each of record_attempts() the way REC does, and say what came out. Run it with REAPER
+    open on the ASIO driver: that's when an interface may refuse to share the guitar input."""
+    lines = [f"camera {cam!r}, mode {camera_mode(cam) or 'default'}; guitar input {mic!r}"]
+    for m, enc in record_attempts(mic):
+        out = fresh(os.path.join(TMP, "camtest.mkv"))
+        label = f"{enc[0]} + {'guitar' if m else 'picture only'}"
+        p = subprocess.Popen(camera_cmd(cam, m, out, enc), stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.PIPE, creationflags=NOWIN)
+        try:
+            p.wait(secs)  # returned early: it failed
+        except subprocess.TimeoutExpired:
+            p.stdin.write(b"q")
+            p.stdin.flush()
+        err = p.communicate(timeout=15)[1]
+        try:
+            frames, length = imageio_ffmpeg.count_frames_and_secs(out)
+            sound = f", guitar peak {np.abs(mono8k(out)).max():.3f}" if m else ""
+            lines.append(f"  OK   {label}: {length:.1f} s, {frames / max(length, 0.1):.0f} fps{sound}")
+            return lines
+        except Exception:
+            lines.append(f"  FAIL {label}: {why(subprocess.CalledProcessError(p.returncode, '', stderr=err))}")
+    return lines
+
+
+def diagnose():
+    """--test: everything a tester should send back, in one text file (the .exe has no console)."""
+    report = os.path.join(DATA, "selftest.txt")
+    lines = [f"{APP} self-test {time.strftime('%Y-%m-%d %H:%M')}, Windows {sys.getwindowsversion().build}",
+             f"REAPER: {REAPER or 'NOT FOUND'}; REAPER running: {running('reaper.exe')}"]
+    try:
+        cams, mics = dshow_devices()
+        lines += [f"cameras: {cams}", f"audio inputs: {mics}", f"encoder: {video_encoder(realtime=True)[0]}"]
+        s = load_settings()
+        if s.get("camera") in cams and s.get("audio") in mics:
+            lines += camera_check(s["camera"], s["audio"])
+        else:
+            lines.append(f"camera check skipped: run RiffCam once and pick devices in SETUP (settings: {s})")
+        lines.append(selftest())
+    except Exception:
+        import traceback
+        lines.append("FAILED:\n" + traceback.format_exc())
+    open(report, "w", encoding="utf-8").write("\n".join(lines) + "\n")
     if sys.stdout:
-        print(result)
+        print("\n".join(lines))
+    else:
+        subprocess.Popen(["notepad", report])
 
 
 if __name__ == "__main__":
     if "--test" in sys.argv:
-        os.makedirs(SONGS, exist_ok=True)
-        selftest()
+        for d in (SONGS, TMP):
+            os.makedirs(d, exist_ok=True)
+        diagnose()
     else:
         load_fonts()
         root = tk.Tk()
