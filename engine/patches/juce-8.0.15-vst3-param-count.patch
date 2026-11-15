@@ -1,0 +1,15 @@
+diff --git a/modules/juce_audio_processors_headless/format_types/juce_VST3PluginFormatImpl.h b/modules/juce_audio_processors_headless/format_types/juce_VST3PluginFormatImpl.h
+index feeb930..578a975 100644
+--- a/modules/juce_audio_processors_headless/format_types/juce_VST3PluginFormatImpl.h
++++ b/modules/juce_audio_processors_headless/format_types/juce_VST3PluginFormatImpl.h
+@@ -3108,7 +3108,9 @@ private:
+             cachedParamValues = CachedParamValues { std::move (allIds) };
+         }
+ 
+-        for (int i = 0; i < editController->getParameterCount(); ++i)
++        // RiffEngine: ask once. Some plug-ins (Neural DSP, 2219 params) make getParameterCount() slow,
++        // and asking it on every iteration turned loading into a ~15 minute wait.
++        for (int i = 0, numParams = editController->getParameterCount(); i < numParams; ++i)
+         {
+             auto* param = new VST3Parameter (*this, i);
+             const auto paramInfo = param->getParameterInfo();

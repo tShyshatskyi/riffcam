@@ -1,0 +1,75 @@
+# Builds RiffEngine on macOS (universal: Apple Silicon + Intel) and Windows, then runs its self-test and a render.
+# The built app is attached to each run as a download.
+name: RiffEngine
+
+on:
+  push:
+    paths: ["engine/**", ".github/workflows/engine.yml"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: engine
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch JUCE + NAM, apply our patches
+        run: ./fetch_deps.sh
+
+      - name: Build
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+            cmake --build build --config Release --parallel
+            echo "EXE=build/RiffEngine_artefacts/Release/RiffEngine.exe" >> "$GITHUB_ENV"
+          else
+            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+            cmake --build build --config Release --parallel
+            echo "EXE=build/RiffEngine_artefacts/Release/RiffEngine.app/Contents/MacOS/RiffEngine" >> "$GITHUB_ENV"
+          fi
+
+      - name: Universal binary? (macOS)
+        if: runner.os == 'macOS'
+        run: lipo -info "$EXE"
+
+      - name: Self-test (safety guards, Cyrillic paths, NAM speed)
+        run: '"$EXE" --selftest --nam deps/NAM/example_models/wavenet_a1_standard.nam'
+
+      - name: Render a test signal through a NAM amp
+        run: |
+          python3 - <<'PY'
+          import wave, struct, math
+          sr = 48000
+          with wave.open("pluck.wav", "wb") as w:
+              w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr)
+              w.writeframes(b"".join(struct.pack("<h", int(12000 * math.exp(-3 * (i % sr) / sr) * math.sin(2 * math.pi * 82.4 * i / sr)))
+                                     for i in range(sr * 5)))
+          PY
+          "$EXE" --render pluck.wav out.wav --nam deps/NAM/example_models/A2.nam --block 128
+          test -s out.wav
+
+      - name: Package (app + "Test RiffEngine" file for testers)
+        run: |
+          mkdir -p out/RiffEngine
+          if [ "$RUNNER_OS" = Windows ]; then
+            cp "$EXE" "launchers/Test RiffEngine.bat" TESTING.md out/RiffEngine/
+          else
+            cp -R build/RiffEngine_artefacts/Release/RiffEngine.app "launchers/Test RiffEngine.command" TESTING.md out/RiffEngine/
+            chmod +x "out/RiffEngine/Test RiffEngine.command"
+            # artifact uploads drop the executable bit, so ship the Mac files inside their own zip
+            (cd out && ditto -c -k --keepParent RiffEngine RiffEngine-mac.zip && rm -rf RiffEngine)
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RiffEngine-${{ runner.os }}
+          path: engine/out
